@@ -50,4 +50,63 @@ BACKEND_TO_USE="${REQ_BACKEND:-${DISPLAY_BACKEND:-auto}}"
 echo "[info] Project root: $PROJECT_ROOT"
  echo "[info] Using backend: $BACKEND_TO_USE"
 
+# Dependency self-check (helps when install used --no-deps or partial system packages)
+MISSING=()
+python - <<'PY'
+import importlib, sys
+required = [
+  ("aiomqtt", "aiomqtt>=2.1.0,<3.0.0"),
+  ("paho.mqtt.client", "paho-mqtt"),
+  ("zeroconf", "zeroconf"),
+  ("PIL", "Pillow"),
+]
+missing = []
+for mod, pkg in required:
+  try:
+    importlib.import_module(mod)
+  except Exception:
+    missing.append(pkg)
+if missing:
+  print("MISSING_DEPS:" + ",".join(missing))
+PY
+if grep -q '^MISSING_DEPS:' <(python - <<'PY'
+import importlib, sys
+required = [
+  ("aiomqtt", "aiomqtt>=2.1.0,<3.0.0"),
+  ("paho.mqtt.client", "paho-mqtt"),
+  ("zeroconf", "zeroconf"),
+  ("PIL", "Pillow"),
+]
+missing = []
+for mod, pkg in required:
+  try:
+    importlib.import_module(mod)
+  except Exception:
+    missing.append(pkg)
+if missing:
+  print("MISSING_DEPS:" + ",".join(missing))
+PY
+); then
+  LINE=$(python - <<'PY'
+import importlib
+required=[("aiomqtt","aiomqtt>=2.1.0,<3.0.0"),("paho.mqtt.client","paho-mqtt"),("zeroconf","zeroconf"),("PIL","Pillow")]
+missing=[]
+for mod,pkg in required:
+  try: importlib.import_module(mod)
+  except Exception: missing.append(pkg)
+print(" ".join(missing))
+PY
+  )
+  echo "[warn] Missing dependencies detected: $LINE" >&2
+  echo "[info] Install them now? (This runs: pip install $LINE) [Y/n]" >&2
+  read -r RESP
+  RESP=${RESP:-Y}
+  if [[ ${RESP,,} != n* ]]; then
+  pip install $LINE
+  else
+  echo "[error] Cannot continue without required dependencies." >&2
+  exit 2
+  fi
+fi
+
 exec python -m mimir_display --backend "$BACKEND_TO_USE" $DEBUG_FLAG
