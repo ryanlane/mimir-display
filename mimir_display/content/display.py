@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Dict, Any, Tuple
 from PIL import Image, ImageOps  # type: ignore
 
+# Unified hardware abstraction (selects correct backend automatically)
+from mimir_display.hardware import display_image as hw_display_image, HARDWARE_AVAILABLE, get_display_capabilities
+
 
 class DisplayManager:
     """
@@ -129,23 +132,19 @@ class DisplayManager:
             raise
     
     def display_image(self, image_path: str):
-        """
-        Display image on hardware.
-        
-        Args:
-            image_path: Path to image file to display
+        """Display image on hardware via unified backend abstraction.
+
+        This replaces legacy inky-only direct calls so non e-ink backends (e.g.,
+        hyperpixelsq) do not emit confusing '[DEV] Would display' logs. The
+        selected backend is resolved by mimir_display.hardware at import time.
         """
         try:
-            # Import hardware module locally to avoid import issues
-            from mimir_display.hardware.inky import display_image, HARDWARE_AVAILABLE
-            
             if HARDWARE_AVAILABLE:
-                display_image(image_path)
+                hw_display_image(image_path)
                 self.logger.info("Displayed image: %s", image_path)
             else:
                 self.logger.info("SIMULATION: Would display image: %s", image_path)
-            
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.logger.error("Failed to display image: %s", e)
             raise
     
@@ -232,33 +231,17 @@ class DisplayManager:
         return canvas
     
     def _hw_display_image(self, img: Image.Image) -> None:
-        """
-        Try the hardware backends in order. If none is present, log and no-op.
-        The 'eframe_inky' backend uses Inky and expects a PIL Image or path;
-        we feed it as a temporary PNG to keep API stable across backends.
-        """
-        # Prefer a PIL-driven backend; otherwise fall back to path API
-        try:
-            # If your eframe_inky has a PIL-friendly API, use it here instead of writing temp.
-            from ..hardware.eframe_inky import display_image as hw_display_image
-            # Save to a temp PNG to be compatible with common path-based APIs
-            from tempfile import NamedTemporaryFile
-            with NamedTemporaryFile(delete=False, suffix=".png") as f:
-                img.save(f.name, format="PNG")
-                tmp_path = f.name
-            hw_display_image(tmp_path)
-            return
-        except Exception as e:
-            self.logger.debug("eframe_inky path-based display failed or not available: %s", e)
+        """Persist image to a temp PNG and hand off to unified backend.
 
+        We serialize to file because current backend APIs accept a path. If a
+        future backend exposes a direct PIL interface we can branch on its
+        capabilities, but this keeps things simple and consistent now.
+        """
+        from tempfile import NamedTemporaryFile
         try:
-            # Alternative backend (if you have one)
-            from ..hardware.inky import display_image as hw_display_image2
-            from tempfile import NamedTemporaryFile
             with NamedTemporaryFile(delete=False, suffix=".png") as f:
                 img.save(f.name, format="PNG")
                 tmp_path = f.name
-            hw_display_image2(tmp_path)
-            return
-        except Exception as e:
-            self.logger.warning("No hardware display backend available: %s", e)
+            self.display_image(tmp_path)
+        except Exception as e:  # noqa: BLE001
+            self.logger.error("Hardware display failed: %s", e)

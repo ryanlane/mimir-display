@@ -68,6 +68,18 @@ class MqttDisplayClientManager:
         # Get hardware capabilities (after stable id set)
         self.capabilities = get_display_capabilities()
 
+        # Optional startup test pattern for non e-ink framebuffer displays.
+        # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
+        if os.environ.get("STARTUP_TEST_PATTERN") == "1":
+            backend_name = self.capabilities.get("backend", "")
+            if backend_name == "hyperpixelsq":
+                try:
+                    from mimir_display.hardware.hyperpixelsq import display_test_pattern  # lazy import
+                    display_test_pattern()
+                    self.logger.info("Startup test pattern rendered (backend=%s)", backend_name)
+                except Exception as e:  # noqa: BLE001 - best-effort visual check
+                    self.logger.debug("Startup test pattern failed: %s", e, exc_info=True)
+
         # Create metadata for registration
         self.metadata = {
             "name": self.config.display_name,

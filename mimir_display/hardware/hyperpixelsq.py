@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import mmap
+import struct
 from typing import Tuple
 from PIL import Image  # type: ignore
 
@@ -114,6 +115,48 @@ def display_image(image_path: str) -> None:
             mm.write(data)
         finally:
             mm.close()
+
+
+def display_test_pattern() -> None:
+    """Render a diagnostic gradient test pattern directly to the framebuffer.
+
+    Pattern design (good for visual smoke test):
+      * Horizontal axis: red (0..31) & blue diagonal mix to quickly show 5-bit channels
+      * Vertical axis: green gradient (0..63) for 6-bit channel
+      * Produces smooth color shifts verifying RGB565 ordering & byte endianness.
+
+    Safe no-op if framebuffer not available.
+    Controlled externally via caller (we don't gate with env var here to keep
+    pure side-effect function)."""
+    if not hardware_available():  # simulation / not writable
+        return
+    w, h, bpp = _detect_geometry()
+    if bpp != 16:
+        # Only implemented for RGB565 currently; silently skip otherwise
+        return
+    _w, _h, _bpp_bytes, fb_size = _framebuffer_sizes()
+    try:
+        with open(FB_PATH, "r+b", buffering=0) as fb:
+            mm = mmap.mmap(fb.fileno(), fb_size, mmap.MAP_SHARED, mmap.PROT_WRITE)
+            try:
+                # Build pattern row by row for memory locality
+                for y in range(h):
+                    row = bytearray(w * 2)
+                    for x in range(w):
+                        r = (x * 31) // max(1, w - 1)
+                        g = (y * 63) // max(1, h - 1)
+                        b = ((x + y) * 31) // max(1, (w - 1) + (h - 1))
+                        rgb565 = (r << 11) | (g << 5) | b
+                        off = x * 2
+                        row[off] = (rgb565 >> 8) & 0xFF
+                        row[off + 1] = rgb565 & 0xFF
+                    mm.seek(y * w * 2)
+                    mm.write(row)
+            finally:
+                mm.close()
+    except Exception:
+        # Silent failure: pattern is best-effort only
+        pass
 
 
 def is_development_mode() -> bool:
