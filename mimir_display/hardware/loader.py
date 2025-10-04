@@ -21,7 +21,8 @@ class DisplayBackend(Protocol):  # minimal protocol for type checkers
 
 _KNOWN_MODULES = {
     "hyperpixelsq": "mimir_display.hardware.hyperpixelsq",
-    "inky": "mimir_display.hardware.inky",
+    # The inky implementation lives in eframe_inky to preserve older naming elsewhere.
+    "inky": "mimir_display.hardware.eframe_inky",
 }
 
 
@@ -72,7 +73,10 @@ def autodetect_backend() -> str:
 
 
 def load_backend(explicit: str | None = None):
+    # Normalize 'auto' sentinel to trigger autodetection.
     name = explicit or os.environ.get("DISPLAY_BACKEND")
+    if name == "auto":
+        name = None
     if not name:
         name = autodetect_backend()
     try:
