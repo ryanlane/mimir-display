@@ -54,9 +54,36 @@ fi
 BACKEND="${OPTIONS[$((CHOICE-1))]}"
 echo "[+] Selected backend: $BACKEND" >&2
 
-read -rp "Install path (directory) [/opt/mimir-display]: " INSTALL_DIR
-INSTALL_DIR=${INSTALL_DIR:-/opt/mimir-display}
-mkdir -p "$INSTALL_DIR"
+SCRIPT_PATH="$0"
+# When invoked via 'bash scripts/install_display.sh' $0 may be 'scripts/install_display.sh' or relative path.
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+  if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
+    SCRIPT_PATH="${BASH_SOURCE[0]}"
+  fi
+fi
+PROJECT_ROOT="$(cd "$(dirname "$SCRIPT_PATH")"/.. && pwd)"
+
+echo
+echo "Installation mode:" >&2
+echo "  1) Editable in-place (default)  - uses existing cloned repo (pip install -e)" >&2
+echo "  2) Copy/Deploy to target path    - creates isolated install at custom directory" >&2
+read -rp "Select mode [1]: " MODE_CHOICE
+MODE_CHOICE=${MODE_CHOICE:-1}
+if [[ $MODE_CHOICE != 1 && $MODE_CHOICE != 2 ]]; then
+  echo "[warn] Invalid choice; defaulting to editable in-place" >&2
+  MODE_CHOICE=1
+fi
+
+if [[ $MODE_CHOICE == 1 ]]; then
+  INSTALL_DIR="$PROJECT_ROOT"
+  echo "[+] Editable install selected (project root: $PROJECT_ROOT)" >&2
+else
+  read -rp "Install path (directory) [/opt/mimir-display]: " INSTALL_DIR
+  INSTALL_DIR=${INSTALL_DIR:-/opt/mimir-display}
+  mkdir -p "$INSTALL_DIR"
+  echo "[+] Will perform a copy/deploy install to $INSTALL_DIR" >&2
+  rsync -a --exclude '.venv' --exclude '.git' "$PROJECT_ROOT/" "$INSTALL_DIR/"
+fi
 
 cd "$INSTALL_DIR"
 
@@ -74,14 +101,18 @@ case "$BACKEND" in
   auto) EXTRA="[all]" ;;
 esac
 
-PROJECT_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
-if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
-  echo "[error] Could not locate pyproject.toml at $PROJECT_ROOT; this installer only supports local source installs (no PyPI)." >&2
-  echo "Clone or copy the project repo so that 'pyproject.toml' is one directory above 'scripts/'." >&2
+if [[ ! -f "pyproject.toml" ]]; then
+  echo "[error] pyproject.toml not found in $INSTALL_DIR; aborting." >&2
   exit 1
 fi
-echo "[+] Installing local source from $PROJECT_ROOT (mimir-display$EXTRA)"
-pip install "$PROJECT_ROOT$EXTRA"
+
+if [[ $MODE_CHOICE == 1 ]]; then
+  echo "[+] Editable install: pip install -e .${EXTRA}" >&2
+  pip install -e ".$EXTRA"
+else
+  echo "[+] Standard install from copied tree .${EXTRA}" >&2
+  pip install ".$EXTRA"
+fi
 
 ENV_FILE=".env"
 if [[ -f $ENV_FILE ]]; then
