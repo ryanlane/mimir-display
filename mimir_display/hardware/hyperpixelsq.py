@@ -25,6 +25,7 @@ from __future__ import annotations
 import os
 import mmap
 from PIL import Image  # type: ignore
+from mimir_display.utils.orientation import orientation_info
 
 FB_PATH = os.environ.get("FRAMEBUFFER", "/dev/fb0")
 SYSFS_BASE = "/sys/class/graphics/fb0"
@@ -334,14 +335,25 @@ def is_development_mode() -> bool:
 
 
 def get_display_capabilities() -> dict:
+    """Return display capability metadata honoring DISPLAY_ORIENTATION.
+
+    We treat the framebuffer's detected geometry (w, h) as the native landscape
+    order. The orientation utility will compute logical (possibly swapped)
+    resolution and required rotation so upstream services can reason about the
+    actual presentation space while we still write native-ordered pixels.
+    """
     w, h, bpp = _detect_geometry()
-    orientation = "square" if w == h else ("landscape" if w > h else "portrait")
+    # Orientation info (logical dimensions & rotation)
+    oinfo = orientation_info(w, h)
     stride = _get_stride(w, 2 if bpp == 16 else max(bpp // 8, 2))
+
     return {
-        "resolution": [w, h],
+        # Logical resolution exposed to rest of system (may swap on portrait)
+        "resolution": [oinfo.logical_width, oinfo.logical_height],
+        # Native hardware (landscape) order for diagnostics
         "native_resolution": [w, h],
-        "orientation": orientation,
-        "rotation_deg": 0,
+        "orientation": oinfo.name,
+        "rotation_deg": oinfo.rotation_deg,
         "supported_formats": ["jpg", "jpeg", "png"],
         "refresh_rate_hz": 30,
         "redis_distribution": True,
