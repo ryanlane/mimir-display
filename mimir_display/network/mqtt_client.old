@@ -1,0 +1,912 @@
+"""
+MQTT Client for Mimir Display Client
+
+This module provides MQTT communication capabilities for the display client,
+implementing the topic hierarchy and message patterns defined in the migration plan.
+
+Topic Hierarchy:
+- mimir/<id>/status     - Device presence (online/offline with LWT)
+- mimir/<id>/heartbeat  - Periodic heartbeat messages
+- mimir/<id>/evt        - Device → service events (ack, rendered, error)
+- mimir/<id>/cmd        - Service → device commands (assign, refresh)
+- mimir/registry/register - Device registration requests
+"""
+
+import asyncio
+import json
+import socket
+import time
+import hashlib
+import logging
+import tempfile
+import random
+from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Dict, Optional, Callable, Any, List
+from contextlib import asynccontextmanager
+
+try:
+    from aiomqtt import Client, MqttError
+    AIOMQTT_AVAILABLE = True
+except ImportError:
+    AIOMQTT_AVAILABLE = False
+    # Create placeholder classes for type hints when aiomqtt is not available
+    class Client:
+        pass
+    class MqttError(Exception):
+        pass
+
+from ..config import Config
+from ..storage.registration import RegistrationState
+from ..content.downloader import ContentDownloader, AssignmentProcessor
+
+
+class MqttTopicManager:
+    """Manages MQTT topic hierarchy for a display device."""
+    
+    def __init__(self, device_id: str):
+        self.device_id = device_id
+        self.base = f"mimir/{device_id}"
+    
+    @property
+    def status(self) -> str:
+        """Device status topic (online/offline)"""
+        return f"{self.base}/status"
+    
+    @property
+    def heartbeat(self) -> str:
+        """Heartbeat topic"""
+        return f"{self.base}/heartbeat"
+    
+    @property
+    def events(self) -> str:
+        """Device events topic (ack, rendered, error)"""
+        return f"{self.base}/evt"
+    
+    @property
+    def commands(self) -> str:
+        """Commands topic (assign, refresh)"""
+        return f"{self.base}/cmd"
+    
+    @property
+    def registration_reply(self) -> str:
+        """Registration reply topic"""
+        return f"{self.base}/registration/reply"
+    
+    @staticmethod
+    def registry() -> str:
+        """Global registration topic"""
+        return "mimir/registry/register"
+
+
+class MqttPresenceManager:
+    """Manages device presence via MQTT status and heartbeat."""
+    
+    def __init__(self, topics: MqttTopicManager, heartbeat_interval: int = 30):
+        self.topics = topics
+        self.heartbeat_interval = heartbeat_interval
+        self.logger = logging.getLogger(__name__)
+        self._heartbeat_task: Optional[asyncio.Task] = None
+        self._client: Optional[Client] = None
+        self._extra_fields: Dict[str, Any] = {} 
+    
+    def set_extra_fields(self, fields: Dict[str, Any]):
+        """Merge extra fields (e.g., {'scene_id': 'abc123'}) into status/heartbeat."""
+        self._extra_fields.update(fields or {})
+
+    def _merge_extra(self, base: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(base)
+        for k, v in (self._extra_fields or {}).items():
+            if v is not None:
+                out[k] = v
+        return out
+
+    async def publish_status_now(self):
+        """Republish retained online status with current extra fields (e.g., after assignment)."""
+        if not self._client:
+            return
+        payload = self._merge_extra({
+            "status": "online",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "device_id": self.topics.device_id,
+            "hostname": socket.gethostname(),
+            "heartbeat_interval": self.heartbeat_interval,
+        })
+        await self._client.publish(self.topics.status, json.dumps(payload), qos=1, retain=True)
+        self.logger.info(f"Republished online status to {self.topics.status}")
+
+    async def start_presence(self, client: Client):
+        """Start presence management with online status and heartbeat."""
+        self._client = client
+
+        # Initial retained "online" (now with extra fields)
+        online_payload = self._merge_extra({
+            "status": "online",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "device_id": self.topics.device_id,
+            "hostname": socket.gethostname(),
+            "heartbeat_interval": self.heartbeat_interval
+        })
+        await client.publish(self.topics.status, json.dumps(online_payload), qos=1, retain=True)
+        self.logger.info(f"Published online status to {self.topics.status}")
+
+        # Start heartbeat loop
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    async def stop_presence(self, reason: str = "graceful_shutdown"):
+        """Stop heartbeat and publish retained offline status (best-effort, idempotent)."""
+        # Cancel the heartbeat loop
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._heartbeat_task = None
+
+        # Publish retained offline status while the client is still connected
+        if self._client:
+            try:
+                offline_payload = self._merge_extra({
+                    "status": "offline",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "device_id": self.topics.device_id,
+                    "reason": reason,
+                })
+                await self._client.publish(self.topics.status, json.dumps(offline_payload), qos=1, retain=True)
+                self.logger.info(f"Published offline status: {reason}")
+            except Exception as e:
+                # Don’t crash shutdown if broker is already gone
+                self.logger.debug(f"Unable to publish offline status: {e}")
+
+        # Detach reference either way
+        self._client = None
+
+    async def _heartbeat_loop(self):
+        """Send periodic heartbeat messages."""
+        try:
+            while True:
+                heartbeat_payload = self._merge_extra({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "device_id": self.topics.device_id,
+                    "uptime": time.time()
+                })
+                await self._client.publish(self.topics.heartbeat, json.dumps(heartbeat_payload), qos=0)
+                self.logger.debug(f"Heartbeat sent at {datetime.now().strftime('%H:%M:%S')}")
+                await asyncio.sleep(self.heartbeat_interval)
+        except asyncio.CancelledError:
+            self.logger.debug("Heartbeat loop cancelled")
+        except Exception as e:
+            self.logger.error(f"Heartbeat loop error: {e}")
+
+
+class MqttRegistrationManager:
+    """Handles device registration via MQTT with persistent state."""
+    
+    def __init__(self, topics: MqttTopicManager, capabilities: Dict[str, Any], metadata: Dict[str, Any]):
+        self.topics = topics
+        self.capabilities = capabilities
+        self.metadata = metadata
+        self.logger = logging.getLogger(__name__)
+        self.state = RegistrationState()
+        self._registration_response: Optional[Dict[str, Any]] = None
+    
+    def is_registered(self) -> bool:
+        """Check if device is currently registered with valid state."""
+        return self.state.is_registered
+    
+    def get_effective_device_id(self) -> str:
+        """Get the device ID to use for MQTT topics (assigned_id if available)."""
+        return self.state.assigned_id or self.topics.device_id
+    
+    async def register_device(self, client: Client) -> Optional[Dict[str, Any]]:
+        """Register device and wait for response, updating persistent state."""
+        # Subscribe to registration reply
+        await client.subscribe(self.topics.registration_reply, qos=1)
+        self.logger.info(f"Subscribed to registration replies at {self.topics.registration_reply}")
+        
+        # Send registration request
+        registration_payload = {
+            "device_id": self.topics.device_id,
+            "capabilities": self.capabilities,
+            "metadata": self.metadata,
+            "reply_to": self.topics.registration_reply,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        await client.publish(
+            self.topics.registry(), 
+            json.dumps(registration_payload), 
+            qos=1
+        )
+        self.logger.info(f"Sent registration request for device {self.topics.device_id}")
+        
+        # Wait for response (with timeout)
+        try:
+            # Use asyncio.wait_for for compatibility instead of asyncio.timeout
+            response = await asyncio.wait_for(
+                self._wait_for_registration_response(client),
+                timeout=30.0
+            )
+            
+            if response:
+                # Update persistent state
+                assigned_id = response.get('assigned_id')
+                service_config = response.get('config', {})
+                
+                if assigned_id:
+                    self.state.update_registration(
+                        device_id=self.topics.device_id,
+                        assigned_id=assigned_id,
+                        service_config=service_config
+                    )
+                    
+                    # Update topics to use assigned ID
+                    self.topics.device_id = assigned_id
+                    self.topics.base = f"mimir/{assigned_id}"
+                    
+                    self.logger.info(f"Registration successful: {assigned_id}")
+                    return response
+                else:
+                    self.logger.error("Registration response missing assigned_id")
+                    return None
+            
+        except asyncio.TimeoutError:
+            self.logger.error("Registration timeout - no response received")
+            return None
+    
+    async def _wait_for_registration_response(self, client: Client) -> Optional[Dict[str, Any]]:
+        """Wait for registration response message."""
+        async for message in client.messages:
+            if message.topic.value == self.topics.registration_reply:
+                try:
+                    response = json.loads(message.payload.decode())
+                    self.logger.info(f"Received registration response: {response}")
+                    return response
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Invalid registration response JSON: {e}")
+                    continue
+        return None
+    
+    def clear_registration(self):
+        """Clear registration state (force re-registration)."""
+        self.state.clear_registration()
+        self.logger.info("Registration state cleared")
+    
+    def get_registration_summary(self) -> Dict[str, Any]:
+        """Get summary of current registration status."""
+        return self.state.get_state_summary()
+
+
+class MqttEventPublisher:
+    """Publishes device events to the service."""
+    
+    def __init__(self, topics: MqttTopicManager):
+        self.topics = topics
+        self.logger = logging.getLogger(__name__)
+        self._client: Optional[Client] = None
+    
+    def set_client(self, client: Client):
+        """Set the MQTT client for publishing."""
+        self._client = client
+    
+    async def publish_ack(
+        self,
+        assignment_id: Optional[str] = None,
+        sequence: Optional[int] = None,
+        success: bool = True,
+        message: Optional[str] = None,
+        **extra,  # tolerate future fields without crashing
+    ):
+        """Publish assignment acknowledgment."""
+        payload = {
+            "type": "ack",
+            "assignment_id": assignment_id,
+            "sequence": sequence,
+            "ok": success,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if message is not None:
+            payload["message"] = message
+        if extra:
+            payload.update(extra)
+
+        await self._publish_event(payload)
+    
+    async def publish_rendered(self, assignment_id: str, duration_ms: Optional[int] = None):
+        """Publish successful rendering event."""
+        payload = {
+            "type": "rendered",
+            "assignment_id": assignment_id,
+            "at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": duration_ms
+        }
+        
+        await self._publish_event(payload)
+    
+    async def publish_error(self, assignment_id: Optional[str] = None, error_type: str = "unknown", message: str = ""):
+        """Publish error event."""
+        payload = {
+            "type": "error",
+            "assignment_id": assignment_id,
+            "when": error_type,
+            "message": message,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+        
+        await self._publish_event(payload)
+    
+    async def _publish_event(self, payload: Dict[str, Any]):
+        """Publish event to the events topic."""
+        if not self._client:
+            self.logger.error("No MQTT client available for event publishing")
+            return
+        
+        await self._client.publish(self.topics.events, json.dumps(payload), qos=0)
+        self.logger.debug(f"Published event: {payload['type']}")
+
+
+class MqttCommandHandler:
+    """Handles incoming MQTT commands from the service with assignment processing."""
+    
+    def __init__(self, topics: MqttTopicManager, assignment_processor: AssignmentProcessor = None, capabilities: Dict[str, Any] = None, metadata: Dict[str, Any] = None):
+        self.topics = topics
+        self.assignment_processor = assignment_processor
+        self.capabilities = capabilities or {}
+        self.metadata = metadata or {}
+        self.logger = logging.getLogger(__name__)
+        self.command_handlers: Dict[str, Callable] = {}
+        self._event_publisher: Optional['MqttEventPublisher'] = None
+        self._mqtt_client: Optional[Client] = None
+        
+        # Register built-in handlers
+        self.register_handler("assign", self._handle_assignment)
+        self.register_handler("refresh", self._handle_refresh)
+        self.register_handler("register", self._handle_register_request)
+        self.register_handler("ready", self._handle_ready)
+        self.register_handler("registration_complete", self._handle_registration_complete)
+        self.register_handler("display_image", self._handle_display_image)
+    
+    def set_event_publisher(self, event_publisher: 'MqttEventPublisher'):
+        """Set the event publisher for sending responses."""
+        self._event_publisher = event_publisher
+    
+    def set_mqtt_client(self, client: Client):
+        """Set the MQTT client for sending registration responses."""
+        self._mqtt_client = client
+    
+    async def handle_command_message(self, message):
+        """Handle a raw MQTT command message."""
+        if message.topic.value == self.topics.commands:
+            await self._handle_command(message.payload.decode())
+    
+    def register_handler(self, command_type: str, handler: Callable):
+        """Register a handler for a specific command type."""
+        self.command_handlers[command_type] = handler
+        self.logger.info(f"Registered handler for command type: {command_type}")
+    
+    async def start_listening(self, client: Client):
+        """Start listening for commands."""
+        await client.subscribe(self.topics.commands, qos=1)
+        self.logger.info(f"Subscribed to commands at {self.topics.commands}")
+        
+        async for message in client.messages:
+            if message.topic.value == self.topics.commands:
+                await self._handle_command(message.payload.decode())
+    
+    async def _handle_command(self, payload: str):
+        """Handle incoming command."""
+        try:
+            command = json.loads(payload)
+            command_type = command.get("type") or command.get("action")
+            assignment_id = command.get("assignment_id", "unknown")
+            
+            self.logger.info(f"Received command: {command_type} (assignment: {assignment_id})")
+            
+            if command_type in self.command_handlers:
+                handler = self.command_handlers[command_type]
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(command)
+                else:
+                    handler(command)
+            else:
+                self.logger.warning(f"No handler for command type: {command_type}")
+                # Send error event for unknown command type
+                if self._event_publisher:
+                    await self._event_publisher.publish_error(
+                        assignment_id=assignment_id,
+                        error_type="unknown_command",
+                        message=f"No handler for command type: {command_type}"
+                    )
+                
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Invalid command JSON: {e}")
+            if self._event_publisher:
+                await self._event_publisher.publish_error(
+                    error_type="invalid_json",
+                    message=f"Command payload is not valid JSON: {e}"
+                )
+        except Exception as e:
+            self.logger.error(f"Error handling command: {e}")
+            if self._event_publisher:
+                await self._event_publisher.publish_error(
+                    error_type="command_processing",
+                    message=f"Command processing failed: {e}"
+                )
+    
+    async def _handle_assignment(self, command: Dict[str, Any]):
+        """Handle assignment command with content download and display."""
+        assignment_id = command.get("assignment_id")
+        sequence = command.get("sequence")
+        # scene_id = command.get("scene_id")
+
+        # if scene_id and hasattr(self, "_on_assignment_scene_hint"):
+        #     try:
+        #         self._on_assignment_scene_hint(scene_id) 
+        #     except Exception:
+        #         pass
+        
+        try:
+            # Send ACK immediately
+            if self._event_publisher:
+                await self._event_publisher.publish_ack(
+                    assignment_id=assignment_id,
+                    sequence=sequence,
+                    success=True
+                )
+
+            # Process assignment if processor is available
+            if self.assignment_processor:
+                start_time = datetime.now()
+                result = await self.assignment_processor.process_assignment(command)
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                
+                if result.get("success"):
+                    # Send rendered event
+                    if self._event_publisher:
+                        await self._event_publisher.publish_rendered(
+                            assignment_id=assignment_id,
+                            duration_ms=duration_ms
+                        )
+                    self.logger.info(f"Assignment {assignment_id} completed successfully in {duration_ms}ms")
+                else:
+                    # Send error event
+                    if self._event_publisher:
+                        await self._event_publisher.publish_error(
+                            assignment_id=assignment_id,
+                            error_type=result.get("error_type", "processing_failed"),
+                            message=result.get("error", "Assignment processing failed")
+                        )
+            else:
+                self.logger.warning(f"No assignment processor configured for {assignment_id}")
+                if self._event_publisher:
+                    await self._event_publisher.publish_error(
+                        assignment_id=assignment_id,
+                        error_type="no_processor",
+                        message="Assignment processor not configured"
+                    )
+                
+        except Exception as e:
+            self.logger.error(f"Assignment {assignment_id} processing failed: {e}")
+            if self._event_publisher:
+                await self._event_publisher.publish_error(
+                    assignment_id=assignment_id,
+                    error_type="assignment_error",
+                    message=str(e)
+                )
+    
+    async def _handle_refresh(self, command: Dict[str, Any]):
+        """Handle refresh command (trigger manual update)."""
+        self.logger.info("Received refresh command")
+        # This could trigger a webhook or other refresh mechanism
+        # For now, just log it as a placeholder
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=command.get("assignment_id", "refresh"),
+                success=True
+            )
+    
+    async def _handle_register_request(self, command: Dict[str, Any]):
+        """Handle registration request from API service - send our details back."""
+        self.logger.info(f"Received registration request from API: {command}")
+        
+        reply_to = command.get("reply_to")
+        if not reply_to:
+            self.logger.error("Registration request missing reply_to topic")
+            return
+            
+        if not self._mqtt_client:
+            self.logger.error("No MQTT client available for sending registration response")
+            return
+            
+        try:
+            # Prepare registration details using our actual capabilities and metadata
+            registration_data = {
+                "device_id": self.topics.device_id,
+                "capabilities": self.capabilities,
+                "metadata": self.metadata,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            self.logger.info(f"Sending registration details to {reply_to}")
+            self.logger.debug(f"Registration data: {registration_data}")
+            
+            # Send registration response via MQTT
+            await self._mqtt_client.publish(
+                reply_to,
+                json.dumps(registration_data),
+                qos=1
+            )
+            
+            self.logger.info("Registration details sent successfully")
+                
+        except Exception as e:
+            self.logger.error(f"Error handling registration request: {e}")
+    
+    async def _handle_ready(self, command: Dict[str, Any]):
+        """Handle ready acknowledgment from API - display is registered and ready."""
+        self.logger.info(f"Received ready acknowledgment: {command}")
+        
+        display_id = command.get("display_id")
+        message = command.get("message", "Ready")
+        
+        self.logger.info(f"Display ready - ID: {display_id}, Message: {message}")
+        
+        # Send acknowledgment back
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=command.get("assignment_id", "ready"),
+                success=True,
+                message="Ready acknowledgment received"
+            )
+    
+    async def _handle_registration_complete(self, command: Dict[str, Any]):
+        """Handle registration complete confirmation from API."""
+        self.logger.info(f"Registration complete: {command}")
+        
+        display_id = command.get("display_id")
+        message = command.get("message", "Registration complete")
+        
+        self.logger.info(f"Registration successful - ID: {display_id}, Message: {message}")
+        
+        # Send acknowledgment back
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=command.get("assignment_id", "registration_complete"),
+                success=True,
+                message="Registration completion acknowledged"
+            )
+    
+    async def _handle_display_image(self, command: Dict[str, Any]):
+        """Handle display image command: download the image and render it to hardware."""
+        self.logger.info("Received display image command: %s", command)
+
+        assignment_id = command.get("assignment_id", "display_image")
+        image_url = command.get("image_url")
+        message = command.get("message", "Test Image")
+
+        if not image_url:
+            self.logger.error("Display image command missing image_url")
+            if self._event_publisher:
+                await self._event_publisher.publish_error(
+                    assignment_id=assignment_id,
+                    error_type="display_error",
+                    message="Missing image_url in display command",
+                )
+            return
+
+        # Immediate ACK so UI is responsive
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=assignment_id, success=True, message=f"Displaying: {message}"
+            )
+
+        # Prefer the normal assignment pipeline (Downloader -> display_callback)
+        if self.assignment_processor:
+            start = datetime.now()
+            try:
+                # Try the schema most clients expect
+                pseudo = {
+                    "assignment_id": assignment_id,
+                    "content": {"delivery": {"type": "url", "url": image_url}}
+                }
+                result = await self.assignment_processor.process_assignment(pseudo)
+                dur = int((datetime.now() - start).total_seconds() * 1000)
+
+                if not result.get("success"):
+                    # Second attempt: top-level delivery
+                    pseudo_alt = {
+                        "assignment_id": assignment_id,
+                        "delivery": {"type": "url", "url": image_url}
+                    }
+                    result = await self.assignment_processor.process_assignment(pseudo_alt)
+
+                if result.get("success"):
+                    if self._event_publisher:
+                        await self._event_publisher.publish_rendered(
+                            assignment_id=assignment_id, duration_ms=dur
+                        )
+                    self.logger.info("Displayed image successfully in %dms", dur)
+                    return
+                else:
+                    level = self.logger.info if result.get("error_type") == "KeyError" else self.logger.warning
+                    level("Assignment processor returned failure, falling back: %s", result)
+
+            except KeyError as e:
+                # Classic signature mismatch (e.g., missing ['url'] where downloader expected it)
+                self.logger.warning("process_assignment KeyError %s, falling back to direct download", e)
+            except Exception as e:
+                self.logger.exception("process_assignment failed (%s), falling back to direct download", e)
+
+        # Fallback: direct async download → render
+        try:
+            start = datetime.now()
+            path = await self._download_to_temp(image_url)
+            await self._render_local_file(path)
+            dur = int((datetime.now() - start).total_seconds() * 1000)
+            if self._event_publisher:
+                await self._event_publisher.publish_rendered(
+                    assignment_id=assignment_id, duration_ms=dur
+                )
+            self.logger.info("Displayed image via fallback in %dms", dur)
+        except Exception as e:
+            self.logger.exception("display_image fallback failed: %s", e)
+            if self._event_publisher:
+                await self._event_publisher.publish_error(
+                    assignment_id=assignment_id, error_type="display_exception", message=str(e)
+                )
+
+    async def _download_to_temp(self, url: str) -> Path:
+        """Download URL to a temp file asynchronously with retries."""
+        attempts = 3
+        backoff = 0.75  # seconds
+        async with ClientSession() as session:
+            last_exc = None
+            for i in range(1, attempts + 1):
+                try:
+                    async with session.get(url, timeout=ClientTimeout(total=20)) as resp:
+                        # Retry on 5xx / 429
+                        if resp.status >= 500 or resp.status == 429:
+                            raise ClientResponseError(
+                                request_info=resp.request_info,
+                                history=resp.history,
+                                status=resp.status,
+                                message=f"server returned {resp.status}",
+                                headers=resp.headers,
+                            )
+                        resp.raise_for_status()
+                        ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+                        ext = {
+                            "image/png": ".png",
+                            "image/jpeg": ".jpg",
+                            "image/webp": ".webp",
+                            "image/gif": ".gif",
+                            "image/bmp": ".bmp",
+                        }.get(ctype, ".img")
+                        data = await resp.read()
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f:
+                            f.write(data)
+                            return Path(f.name)
+                except (ClientResponseError, ClientError, asyncio.TimeoutError) as e:
+                    last_exc = e
+                    if i == attempts:
+                        break
+                    # jittered backoff
+                    await asyncio.sleep(backoff * (1 + random.random() * 0.3))
+                    backoff *= 1.6
+            # All retries failed
+            raise last_exc
+
+    async def _render_local_file(self, path: Path) -> None:
+        """Call the same display callback path the assignment processor uses."""
+        # Reuse the same callback the manager provided to the MQTT client
+        if self.assignment_processor and callable(self.assignment_processor.display_callback):
+            await self.assignment_processor.display_callback(path, display_config={})
+        else:
+            # As an ultimate fallback, import the manager-level display directly if needed
+            raise RuntimeError("Display callback unavailable; cannot render image")
+
+
+class MqttDisplayClient:
+    """Main MQTT client for display devices with registration state management and command processing."""
+    
+    def __init__(self, config: Config, capabilities: Dict[str, Any], metadata: Dict[str, Any], display_callback=None):
+        if not AIOMQTT_AVAILABLE:
+            raise RuntimeError("aiomqtt not available - install with: pip install aiomqtt")
+        
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize device ID - use configured display_id (which falls back to hostname)
+        self.device_id = config.display_id
+        
+        # Initialize components
+        self.topics = MqttTopicManager(self.device_id)
+        self.registration = MqttRegistrationManager(
+            self.topics, 
+            capabilities, 
+            metadata
+        )
+        
+        # Check if we have a previous registration and use the assigned ID
+        if self.registration.is_registered():
+            effective_id = self.registration.get_effective_device_id()
+            self.device_id = effective_id
+            self.topics = MqttTopicManager(effective_id)
+            self.logger.info(f"Using registered device ID: {effective_id}")
+        
+        # Initialize content processing
+        self.downloader = ContentDownloader()
+        self.assignment_processor = AssignmentProcessor(self.downloader, display_callback)
+        
+        # Initialize other managers with potentially updated topics
+        self.presence = MqttPresenceManager(self.topics, config.mqtt_heartbeat_interval)
+        self.events = MqttEventPublisher(self.topics)
+        self.commands = MqttCommandHandler(self.topics, self.assignment_processor, capabilities, metadata)
+        
+        # Wire up event publisher to command handler
+        self.commands.set_event_publisher(self.events)
+        
+        # State
+        self._client: Optional[Client] = None
+        self._running = False
+    
+    @asynccontextmanager
+    async def connection(self):
+        async with Client(
+            hostname=self.config.mqtt_broker_host,
+            port=self.config.mqtt_broker_port,
+            identifier=self.device_id,
+            username=self.config.mqtt_username,
+            password=self.config.mqtt_password,
+        ) as client:
+            self._client = client
+            self.events.set_client(client)
+
+            self.logger.info(
+                f"Connected to MQTT broker at {self.config.mqtt_broker_host}:{self.config.mqtt_broker_port}"
+            )
+
+            await self.presence.start_presence(client)
+
+            try:
+                yield client
+            finally:
+                # Best-effort offline while still connected
+                try:
+                    await self.presence.stop_presence()
+                except Exception as e:
+                    self.logger.debug(f"stop_presence failed: {e}")
+                self.events.set_client(None)
+
+        self.logger.info("MQTT connection closed")
+    
+    async def register(self) -> Optional[Dict[str, Any]]:
+        """Register device with the service, updating state and topics as needed."""
+        async with self.connection() as client:
+            response = await self.registration.register_device(client)
+            
+            if response:
+                # Update our device ID and topics if registration assigned a new ID
+                new_device_id = self.registration.get_effective_device_id()
+                if new_device_id != self.device_id:
+                    self.device_id = new_device_id
+                    self.topics = MqttTopicManager(self.device_id)
+                    
+                    # Update all components with new topics
+                    self.events.topics = self.topics
+                    self.commands.topics = self.topics
+                    
+                    # Restart presence with updated topics
+                    await self.presence.stop_presence()
+                    self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+                    await self.presence.start_presence(client)
+                    
+                    self.logger.info(f"Registration complete - now using device ID: {self.device_id}")
+                
+            return response
+    
+    def is_registered(self) -> bool:
+        """Check if device is currently registered."""
+        return self.registration.is_registered()
+    
+    def get_registration_summary(self) -> Dict[str, Any]:
+        """Get registration status summary."""
+        return self.registration.get_registration_summary()
+    
+    def clear_registration(self):
+        """Clear registration state (force re-registration)."""
+        old_id = self.device_id
+        self.registration.clear_registration()
+        
+        # Reset to auto-generated device ID
+        hostname = socket.gethostname()
+        self.device_id = create_device_id(hostname)
+        self.topics = MqttTopicManager(self.device_id)
+        
+        # Update all components
+        self.events.topics = self.topics
+        self.commands.topics = self.topics
+        self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+        
+        self.logger.info(f"Registration cleared: {old_id} -> {self.device_id}")
+    
+    def set_display_callback(self, callback: Callable):
+        """Set or update the display callback function."""
+        self.assignment_processor.display_callback = callback
+        self.logger.info("Display callback updated")
+    
+    def get_cache_info(self) -> Dict[str, Any]:
+        """Get information about the content cache."""
+        return self.downloader.get_cache_info()
+    
+    def clear_cache(self, keep_recent: int = 0) -> int:
+        """Clear the content cache."""
+        return self.downloader.clear_cache(keep_recent)
+    
+    def register_command_handler(self, command_type: str, handler: Callable):
+        """Register a handler for MQTT commands."""
+        self.commands.register_handler(command_type, handler)
+    
+    async def run_discovery_listener(self):
+        try:
+            async with self.connection() as client:
+                self.logger.info("Starting discovery listener for device: %s", self.device_id)
+
+                # REMOVE this line (connection() already starts presence):
+                # await self.presence.start_presence(client)
+
+                self.commands.set_mqtt_client(client)
+
+                await client.subscribe(self.topics.commands, qos=1)
+                self.logger.info("Listening for registration commands at %s", self.topics.commands)
+
+                async for message in client.messages:
+                    try:
+                        await self.commands.handle_command_message(message)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        self.logger.error("Error handling command in discovery mode: %s", e, exc_info=True)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.logger.error("Discovery listener crashed: %s", e, exc_info=True)
+            raise
+        finally:
+            # (Optional) You can keep this cleanup, but presence is already stopped by connection().
+            try:
+                self.commands.set_mqtt_client(None)
+            except Exception:
+                pass
+
+
+
+    async def run_command_listener(self):
+        """Run the command listener loop."""
+        async with self.connection() as client:
+            await self.commands.start_listening(client)
+    
+    async def publish_event(self, event_type: str, **kwargs):
+        """Convenience method to publish events."""
+        if event_type == "ack":
+            await self.events.publish_ack(**kwargs)
+        elif event_type == "rendered":
+            await self.events.publish_rendered(**kwargs)
+        elif event_type == "error":
+            await self.events.publish_error(**kwargs)
+        else:
+            self.logger.warning(f"Unknown event type: {event_type}")
+
+
+def create_device_id(hostname: str) -> str:
+    """Create a consistent device ID from hostname."""
+    return f"auto-{hostname}"
+
+
+def create_display_id_hash(device_id: str) -> str:
+    """Create a display ID hash for service assignment."""
+    return f"display-{hashlib.md5(device_id.encode()).hexdigest()[:6]}"

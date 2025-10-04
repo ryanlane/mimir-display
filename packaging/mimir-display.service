@@ -1,0 +1,36 @@
+[Unit]
+Description=Mimir Display Client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust if you create a dedicated user during install
+User=mimir
+Group=mimir
+# Directory used for runtime/state (logs, optional cache)
+WorkingDirectory=/var/lib/mimir-display
+# Environment file (optional per-device overrides)
+EnvironmentFile=-/etc/mimir-display/.env
+Environment=PYTHONUNBUFFERED=1
+# Explicit state + cache directories
+Environment=MIMIR_STATE_DIR=/var/lib/mimir-display/state
+Environment=MIMIR_CACHE_DIR=/var/lib/mimir-display/cache
+# Hardware access groups for Inky / GPIO / I2C / SPI
+SupplementaryGroups=spi i2c gpio
+
+# ExecStart uses the console script installed into the venv
+ExecStart=/opt/mimir-display/venv/bin/mimir-display
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+LockPersonality=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
