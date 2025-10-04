@@ -87,13 +87,13 @@ class MqttCommandHandler:
     def register_handler(self, command_type: str, handler: Callable):
         """Register a handler for a specific command type."""
         self.command_handlers[command_type] = handler
-    self.logger.info("Registered handler for command type: %s", command_type)
+        self.logger.info("Registered handler for command type: %s", command_type)
     
     async def start_listening(self, client: Client):
         """Start listening for commands."""
         self.set_mqtt_client(client)  # Store the client for event publishing
         await client.subscribe(self.topics.commands, qos=1)
-    self.logger.info("Subscribed to commands at %s", self.topics.commands)
+        self.logger.info("Subscribed to commands at %s", self.topics.commands)
         
         async for message in client.messages:
             if message.topic.value == self.topics.commands:
@@ -428,7 +428,7 @@ class MqttCommandHandler:
 
         # Immediate optimistic ACK (lets UI show progress quickly)
         if self._event_publisher:
-            target_msg = "Displaying: %s" % self._pretty_display_target(image_url)
+            target_msg = f"Displaying: {self._pretty_display_target(image_url)}"
             await self._event_publisher.publish_ack(
                 assignment_id=assignment_id,
                 success=True,
