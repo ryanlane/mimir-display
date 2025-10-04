@@ -1,18 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== Mimir Unified Display Installer ==="
+echo "=== Mimir Unified Display Installer (Interactive) ==="
 
 if [[ $(id -u) -eq 0 ]]; then
   echo "[info] Running as root. A per-user virtualenv is recommended; proceed with caution." >&2
 fi
 
 DEFAULT_BACKEND="auto"
-read -rp "Select backend (inky/hyperpixelsq/auto) [auto]: " CHOICE
-BACKEND=${CHOICE:-$DEFAULT_BACKEND}
-if [[ ! $BACKEND =~ ^(inky|hyperpixelsq|auto)$ ]]; then
-  echo "Invalid backend choice" >&2; exit 1
-fi
+
+menu_backend_select() {
+  local options=("auto" "hyperpixelsq" "inky")
+  local index=0
+  local esc=$'\033'
+  # If not a TTY, fallback to simple read
+  if [[ ! -t 0 ]]; then
+    echo "$DEFAULT_BACKEND"
+    return
+  fi
+  stty -echo -icanon time 0 min 0 2>/dev/null || true
+  trap 'stty sane 2>/dev/null || true' EXIT
+  while true; do
+    printf "\nSelect display backend (arrow keys + Enter):\n"
+    for i in "${!options[@]}"; do
+      if [[ $i -eq $index ]]; then
+        printf "  > %s\n" "${options[$i]}"
+      else
+        printf "    %s\n" "${options[$i]}"
+      fi
+    done
+    # Read key sequence
+    IFS= read -r -s -n1 key || true
+    if [[ $key == $esc ]]; then
+      read -r -s -n2 rest || true
+      key+=$rest
+      case $key in
+        $'\033[A') # up
+          ((index--)); (( index < 0 )) && index=$((${#options[@]}-1))
+          ;;
+        $'\033[B') # down
+          ((index++)); (( index >= ${#options[@]} )) && index=0
+          ;;
+      esac
+    elif [[ $key == "" ]]; then
+      # Enter pressed
+      echo "${options[$index]}"
+      break
+    fi
+    printf "\033[%dA" $((${#options[@]}+1))  # move cursor up to redraw
+  done
+  stty sane 2>/dev/null || true
+}
+
+BACKEND=$(menu_backend_select)
+echo "[+] Selected backend: $BACKEND"
 
 read -rp "Install path (directory) [/opt/mimir-display]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-/opt/mimir-display}
