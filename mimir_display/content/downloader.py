@@ -10,6 +10,7 @@ import logging
 import aiohttp
 import asyncio
 import os
+import socket
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
@@ -150,6 +151,23 @@ class ContentDownloader:
         
         # Download the file
         self.logger.info(f"Downloading {content_id} from {url}")
+        # Early .local host resolution (mirrors fallback path in commands)
+        host_header = None
+        try:
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(url)
+            hostname = parsed.hostname or ""
+            if hostname.endswith(".local"):
+                try:
+                    resolved_ip = socket.gethostbyname(hostname)
+                    host_header = hostname
+                    rebuilt = parsed._replace(netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else ""))
+                    url = urlunparse(rebuilt)
+                    self.logger.debug("Pre-resolved .local host %s -> %s", hostname, resolved_ip)
+                except Exception as re:
+                    self.logger.debug(".local pre-resolution failed (%s): %s", hostname, re)
+        except Exception:  # parsing errors unlikely; ignore
+            pass
         start_time = datetime.now()
         
         temp_path = cache_path.with_suffix('.tmp')
@@ -157,7 +175,8 @@ class ContentDownloader:
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
+                headers = {"Host": host_header} if host_header else None
+                async with session.get(url, headers=headers) as response:
                     response.raise_for_status()
                     
                     # Stream download to temporary file
