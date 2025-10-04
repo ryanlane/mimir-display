@@ -105,12 +105,51 @@ fi
 
 cd "$INSTALL_DIR"
 
+# ------------------------------------------------------------
+# Platform / architecture helpers (for Pi Zero W armv6 issues)
+# ------------------------------------------------------------
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+USE_SYSTEM_NUMPY=0
+if [[ $ARCH == armv6l ]]; then
+  echo "[info] Detected ARMv6 (e.g. Raspberry Pi Zero W)." >&2
+  if [[ $BACKEND == inky || $EXTRA == *inky* ]]; then
+    echo "[warn] Inky backend pulls numpy; armv6 often lacks working wheels." >&2
+    echo "      Option: use system-packaged numpy + openblas via --system-site-packages venv." >&2
+    read -rp "Install system numpy/openblas & use system-site-packages venv? (Y/n): " SYSNP
+    SYSNP=${SYSNP:-Y}
+    if [[ ${SYSNP,,} != n* ]]; then
+      USE_SYSTEM_NUMPY=1
+      echo "[+] Will install system numeric libs and create venv with --system-site-packages." >&2
+      sudo apt update
+      sudo apt install -y python3-numpy libopenblas0 || true
+    else
+      echo "[info] Proceeding without system numpy; may hit build/import errors." >&2
+    fi
+  fi
+fi
+
+# Pillow build deps (optional) if building from source likely
+if [[ $ARCH == armv6l ]]; then
+  read -rp "Install Pillow build dependencies (zlib, jpeg, freetype etc)? (Y/n): " PILDEPS
+  PILDEPS=${PILDEPS:-Y}
+  if [[ ${PILDEPS,,} != n* ]]; then
+    echo "[+] Installing Pillow build deps" >&2
+    sudo apt update
+    sudo apt install -y zlib1g-dev libjpeg62-turbo-dev libtiff5-dev libopenjp2-7-dev \
+      libfreetype6-dev liblcms2-dev libwebp-dev libharfbuzz-dev libfribidi-dev libxcb1-dev || true
+  fi
+fi
+
 if [[ ! -d .venv ]]; then
-  echo "[+] Creating virtualenv (.venv)"
-  python3 -m venv .venv
+  echo "[+] Creating virtualenv (.venv)" >&2
+  if [[ $USE_SYSTEM_NUMPY == 1 ]]; then
+    python3 -m venv --system-site-packages .venv
+  else
+    python3 -m venv .venv
+  fi
 fi
 source .venv/bin/activate
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 
 EXTRA=""
 case "$BACKEND" in
