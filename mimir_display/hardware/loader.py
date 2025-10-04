@@ -33,9 +33,41 @@ def _import_backend(name: str) -> Any:
 
 
 def autodetect_backend() -> str:
-    # HyperPixel detection: /dev/fb0 + optional env HYPERPIXEL=1
-    if os.path.exists("/dev/fb0") and os.environ.get("FORCE_INKY") != "1":
-        return "hyperpixelsq"
+    """Best-effort backend autodetection.
+
+    Strategy:
+    1. If /dev/fb0 exists inspect sysfs for geometry to detect HyperPixel Square (720x720 @ 16bpp)
+    2. FALLBACK to inky (historical default) when framebuffer not present or size mismatch
+
+    Environment overrides:
+    * FORCE_INKY=1  -> always choose inky (even if fb0 present)
+    * FORCE_SIM=1   -> skip detection and force simulation (handled later when import fails)
+    """
+    if os.environ.get("FORCE_INKY") == "1":
+        return "inky"
+
+    fb_path = "/dev/fb0"
+    if os.path.exists(fb_path):
+        # HyperPixel Square characteristics: 720x720 logical resolution, 16bpp rgb565
+        virt_size_path = "/sys/class/graphics/fb0/virtual_size"
+        bpp_path = "/sys/class/graphics/fb0/bits_per_pixel"
+        try:
+            with open(virt_size_path, "r", encoding="utf-8") as f:
+                size_txt = f.read().strip()
+            w_h = size_txt.split(",")
+            if len(w_h) == 2:
+                w, h = (int(w_h[0]), int(w_h[1]))
+                bpp = 0
+                try:
+                    with open(bpp_path, "r", encoding="utf-8") as f2:
+                        bpp = int(f2.read().strip())
+                except Exception:
+                    pass  # non-fatal
+                if w == 720 and h == 720 and bpp in (16, 0):  # tolerate unknown bpp
+                    return "hyperpixelsq"
+        except Exception:
+            # If any inspection fails but fb0 exists, still assume HyperPixel unless FORCE_INKY
+            return "hyperpixelsq"
     return "inky"  # default legacy
 
 

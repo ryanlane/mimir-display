@@ -88,6 +88,36 @@ fi
 grep -q '^DISPLAY_BACKEND=' .env || echo "DISPLAY_BACKEND=${BACKEND}" >> .env
 grep -q '^LOG_LEVEL=' .env || echo "LOG_LEVEL=INFO" >> .env
 
+if [[ $BACKEND == "hyperpixelsq" ]]; then
+  # Attempt to detect Raspberry Pi boot config location (varies between distros)
+  BOOT_CANDIDATES=(/boot/firmware/config.txt /boot/config.txt)
+  CONFIG_PATH=""
+  for p in "${BOOT_CANDIDATES[@]}"; do
+    if [[ -f $p ]]; then
+      CONFIG_PATH=$p
+      break
+    fi
+  done
+  if [[ -n $CONFIG_PATH ]]; then
+    OVERLAY_LINE="dtoverlay=vc4-kms-dpi-hyperpixel4sq"
+    if ! grep -q "^${OVERLAY_LINE}" "$CONFIG_PATH"; then
+      echo "[info] HyperPixel overlay not found in $CONFIG_PATH"
+      read -rp "Append '${OVERLAY_LINE}' to $CONFIG_PATH now? (y/N): " ADD_OVL
+      if [[ ${ADD_OVL,,} == y* ]]; then
+        echo "[+] Adding overlay line to $CONFIG_PATH (requires reboot)"
+        sudo tee -a "$CONFIG_PATH" >/dev/null <<<"${OVERLAY_LINE}"
+        echo "[info] Overlay appended. Reboot after install to activate framebuffer."
+      else
+        echo "[warn] Overlay not added. Ensure '${OVERLAY_LINE}' is present before running service." >&2
+      fi
+    else
+      echo "[info] HyperPixel overlay already present in $CONFIG_PATH"
+    fi
+  else
+    echo "[warn] Could not locate config.txt to verify HyperPixel overlay. Check your boot partition manually." >&2
+  fi
+fi
+
 read -rp "Create systemd service? (y/N): " MAKE_SVC
 if [[ ${MAKE_SVC,,} == y* ]]; then
   SERVICE_PATH="/etc/systemd/system/mimir-display.service"

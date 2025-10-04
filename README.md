@@ -71,8 +71,33 @@ sudo systemctl enable --now mimir-display
 ## Backend Detection Logic
 1. CLI `--backend`
 2. `DISPLAY_BACKEND` env
-3. Autodetect: `/dev/fb0` → HyperPixel else Inky
-4. Simulation fallback
+3. Autodetect sequence:
+	* Inspect `/dev/fb0` and its sysfs metadata (`/sys/class/graphics/fb0/virtual_size`, `bits_per_pixel`).
+	* If size = `720x720` (and `bpp` = 16 when readable) → assume HyperPixel 4.0 Square (RGB565)
+	* Else fallback to Inky
+4. Simulation fallback (when backend import fails or forced)
+
+Environment shortcuts:
+* `FORCE_INKY=1` to bypass framebuffer detection
+* `FORCE_SIM=1` to force simulation (primarily for development)
+
+## HyperPixel 4.0 Square Setup
+The HyperPixel Square does not need a Python driver here; it appears as a Linux framebuffer (DPI) once its Device Tree overlay is enabled.
+
+1. Edit your boot config (path varies by distro) adding:
+	```
+	dtoverlay=vc4-kms-dpi-hyperpixel4sq
+	```
+	Typical locations: `/boot/firmware/config.txt` (newer Raspberry Pi OS) or `/boot/config.txt`.
+2. Reboot the Raspberry Pi; this should create `/dev/fb0` with a 720x720 16bpp framebuffer.
+3. Run the installer and select `hyperpixelsq` (or choose `auto` and let autodetection pick it).
+
+The installer script will offer to append the overlay line automatically if it is missing.
+
+Troubleshooting:
+* Run `cat /sys/class/graphics/fb0/virtual_size` → expect `720,720`.
+* Run `cat /sys/class/graphics/fb0/bits_per_pixel` → expect `16`.
+* If these differ, verify the overlay line and reboot again.
 
 ## Adding a New Backend
 Implement module with functions: `get_display_capabilities()`, `display_image(path)`, `is_development_mode()`. Add to `hardware/loader.py` map. Provide resolution + formats.
