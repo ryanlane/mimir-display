@@ -5,9 +5,14 @@ and compute rotation plus logical resolution to report upstream.
 
 Environment variable: DISPLAY_ORIENTATION
 Accepted values (case-insensitive):
-  landscape (default)
-  portrait_left   -> panel physically rotated CCW 90° (top was original left).
-  portrait_right  -> panel physically rotated CW 90° (top was original right).
+    landscape       - (default) no rotation applied
+    portrait_left   - panel physically rotated CCW 90° (top was original left)
+    portrait_right  - panel physically rotated CW 90° (top was original right)
+
+Auto-detection fallback (when DISPLAY_ORIENTATION is unset):
+    * If native_w == native_h -> "landscape" (square panel, treat as landscape coordinate space)
+    * Else if native_h > native_w -> infer portrait_right (arbitrary but consistent choice)
+    * Else -> landscape
 
 Rotation semantics:
   We rotate the loaded image BEFORE sending to hardware so the hardware
@@ -36,6 +41,10 @@ class OrientationInfo:
 
 
 def parse_orientation(raw: str | None) -> str:
+    """Normalize raw env orientation value.
+
+    Returns 'landscape' for any unrecognized value or None.
+    """
     if not raw:
         return "landscape"
     val = raw.strip().lower()
@@ -47,24 +56,32 @@ def parse_orientation(raw: str | None) -> str:
 def orientation_info(native_w: int, native_h: int, env_value: str | None = None) -> OrientationInfo:
     """Return orientation info given the panel's native (landscape) resolution.
 
-    Args:
-        native_w: Native landscape width from hardware.
-        native_h: Native landscape height from hardware.
-        env_value: Optional override of orientation env value.
+    Resolution parameters (native_w, native_h) are assumed in the panel's
+    physical landscape ordering. The logical dimensions returned may swap
+    when a portrait orientation is selected.
 
-    Returns:
-        OrientationInfo with rotation + logical resolution.
+    Auto-detection: If env is unset/empty we infer a reasonable default:
+        * native_w == native_h -> landscape (square treated as landscape)
+        * native_h > native_w  -> portrait_right (arbitrary but stable)
+        * else -> landscape
     """
-    name = parse_orientation(env_value or os.getenv("DISPLAY_ORIENTATION"))
+    raw = env_value if env_value is not None else os.getenv("DISPLAY_ORIENTATION")
+    if raw:
+        name = parse_orientation(raw)
+    else:
+        # Auto inference path
+        if native_w == native_h:
+            name = "landscape"
+        elif native_h > native_w:
+            # Choose portrait_right as a conventional mapping (CW rotation)
+            name = "portrait_right"
+        else:
+            name = "landscape"
 
     if name == "portrait_left":
-        # Physically rotated CCW -> need to rotate content +90 CW (i.e., 90 deg)
         return OrientationInfo(name, 90, native_h, native_w)
     if name == "portrait_right":
-        # Physically rotated CW -> rotate content +270 CW (i.e., -90 deg)
         return OrientationInfo(name, 270, native_h, native_w)
-
-    # Landscape default
     return OrientationInfo("landscape", 0, native_w, native_h)
 
 

@@ -50,6 +50,14 @@ class MDNSService:
                 self.logger.info("mDNS binding to 127.0.0.1; discovery may be limited")
 
             name = f"mimir-display-{self.display_client.display_id}._mimir-display._tcp.local."
+            caps = getattr(self.display_client, 'capabilities', {}) or {}
+            orientation = caps.get('orientation') or 'landscape'
+            rotation = caps.get('rotation_deg')
+            native_res = caps.get('native_resolution')
+            native_res_str = None
+            if isinstance(native_res, (list, tuple)) and len(native_res) == 2:
+                native_res_str = f"{native_res[0]}x{native_res[1]}"
+
             info = ServiceInfo(
                 type_="_mimir-display._tcp.local.",
                 name=name,
@@ -66,6 +74,9 @@ class MDNSService:
                     b"platform_url": self.config.platform_url.encode(),
                     b"client_version": self.config.get("client_version", "1.0.0").encode(),
                     b"last_seen": datetime.now(timezone.utc).isoformat().encode(),
+                    b"orientation": orientation.encode(),
+                    b"rotation_deg": (str(rotation).encode() if rotation is not None else b""),
+                    b"native_resolution": (native_res_str.encode() if native_res_str else b""),
                 },
                 server=f"mimir-display-{self.display_client.display_id}.local.",
             )
@@ -99,7 +110,19 @@ class MDNSService:
             return
         try:
             props = dict(self.service.properties)
+            caps = getattr(self.display_client, 'capabilities', {}) or {}
             props[b"last_seen"] = datetime.now(timezone.utc).isoformat().encode()
+            # Update dynamic orientation / rotation in case env changed at runtime
+            orientation = caps.get('orientation') or 'landscape'
+            rotation = caps.get('rotation_deg')
+            native_res = caps.get('native_resolution')
+            native_res_str = None
+            if isinstance(native_res, (list, tuple)) and len(native_res) == 2:
+                native_res_str = f"{native_res[0]}x{native_res[1]}"
+            props[b"orientation"] = orientation.encode()
+            props[b"rotation_deg"] = (str(rotation).encode() if rotation is not None else b"0")
+            if native_res_str:
+                props[b"native_resolution"] = native_res_str.encode()
             updated = ServiceInfo(
                 self.service.type, self.service.name,
                 addresses=self.service.addresses, port=self.service.port,
