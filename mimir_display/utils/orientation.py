@@ -8,9 +8,10 @@ Accepted values (case-insensitive):
     landscape       - (default) no rotation applied
     portrait_left   - panel physically rotated CCW 90° (top was original left)
     portrait_right  - panel physically rotated CW 90° (top was original right)
+    square          - explicit square semantic (no rotation, width==height)
 
 Auto-detection fallback (when DISPLAY_ORIENTATION is unset):
-    * If native_w == native_h -> "landscape" (square panel, treat as landscape coordinate space)
+    * If native_w == native_h -> "square" (square semantic)
     * Else if native_h > native_w -> infer portrait_right (arbitrary but consistent choice)
     * Else -> landscape
 
@@ -48,7 +49,7 @@ def parse_orientation(raw: str | None) -> str:
     if not raw:
         return "landscape"
     val = raw.strip().lower()
-    if val in ("landscape", "portrait_left", "portrait_right"):
+    if val in ("landscape", "portrait_left", "portrait_right", "square"):
         return val
     return "landscape"
 
@@ -61,7 +62,7 @@ def orientation_info(native_w: int, native_h: int, env_value: str | None = None)
     when a portrait orientation is selected.
 
     Auto-detection: If env is unset/empty we infer a reasonable default:
-        * native_w == native_h -> landscape (square treated as landscape)
+    * native_w == native_h -> square
         * native_h > native_w  -> portrait_right (arbitrary but stable)
         * else -> landscape
     """
@@ -71,13 +72,15 @@ def orientation_info(native_w: int, native_h: int, env_value: str | None = None)
     else:
         # Auto inference path
         if native_w == native_h:
-            name = "landscape"
+            name = "square"
         elif native_h > native_w:
             # Choose portrait_right as a conventional mapping (CW rotation)
             name = "portrait_right"
         else:
             name = "landscape"
 
+    if name == "square":
+        return OrientationInfo("square", 0, native_w, native_h)
     if name == "portrait_left":
         return OrientationInfo(name, 90, native_h, native_w)
     if name == "portrait_right":
