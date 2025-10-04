@@ -9,51 +9,50 @@ fi
 
 DEFAULT_BACKEND="auto"
 
-menu_backend_select() {
-  local options=("auto" "hyperpixelsq" "inky")
-  local index=0
-  local esc=$'\033'
-  # If not a TTY, fallback to simple read
-  if [[ ! -t 0 ]]; then
-    echo "$DEFAULT_BACKEND"
-    return
+detect_backend() {
+  # Mimics Python loader logic (lightweight subset)
+  if [[ ${FORCE_INKY:-} == 1 ]]; then
+    echo "inky"; return
   fi
-  stty -echo -icanon time 0 min 0 2>/dev/null || true
-  trap 'stty sane 2>/dev/null || true' EXIT
-  while true; do
-    printf "\nSelect display backend (arrow keys + Enter):\n"
-    for i in "${!options[@]}"; do
-      if [[ $i -eq $index ]]; then
-        printf "  > %s\n" "${options[$i]}"
-      else
-        printf "    %s\n" "${options[$i]}"
-      fi
-    done
-    # Read key sequence
-    IFS= read -r -s -n1 key || true
-    if [[ $key == $esc ]]; then
-      read -r -s -n2 rest || true
-      key+=$rest
-      case $key in
-        $'\033[A') # up
-          ((index--)); (( index < 0 )) && index=$((${#options[@]}-1))
-          ;;
-        $'\033[B') # down
-          ((index++)); (( index >= ${#options[@]} )) && index=0
-          ;;
-      esac
-    elif [[ $key == "" ]]; then
-      # Enter pressed
-      echo "${options[$index]}"
-      break
+  if [[ -e /dev/fb0 ]]; then
+    local virt="$(grep -s '' /sys/class/graphics/fb0/virtual_size || true)"
+    local bpp="$(grep -s '' /sys/class/graphics/fb0/bits_per_pixel || true)"
+    if [[ $virt == "720,720" && ( -z $bpp || $bpp == 16 ) ]]; then
+      echo "hyperpixelsq"; return
     fi
-    printf "\033[%dA" $((${#options[@]}+1))  # move cursor up to redraw
-  done
-  stty sane 2>/dev/null || true
+  fi
+  echo "inky"
 }
 
-BACKEND=$(menu_backend_select)
-echo "[+] Selected backend: $BACKEND"
+SUGGESTED="$(detect_backend)"
+
+echo "Available display backends:" >&2
+OPTIONS=()
+LABELS=()
+
+# Put suggested first
+OPTIONS+=("$SUGGESTED")
+LABELS+=("$SUGGESTED (detected)")
+
+for opt in hyperpixelsq inky auto; do
+  if [[ $opt != "$SUGGESTED" ]]; then
+    OPTIONS+=("$opt")
+    LABELS+=("$opt")
+  fi
+done
+
+for i in "${!LABELS[@]}"; do
+  printf "  %d) %s\n" "$((i+1))" "${LABELS[$i]}"
+done
+
+read -rp "Select display backend [1]: " CHOICE
+CHOICE=${CHOICE:-1}
+if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > ${#OPTIONS[@]} )); then
+  echo "[warn] Invalid choice; defaulting to option 1 (${OPTIONS[0]})" >&2
+  CHOICE=1
+fi
+BACKEND="${OPTIONS[$((CHOICE-1))]}"
+echo "[+] Selected backend: $BACKEND" >&2
 
 read -rp "Install path (directory) [/opt/mimir-display]: " INSTALL_DIR
 INSTALL_DIR=${INSTALL_DIR:-/opt/mimir-display}
