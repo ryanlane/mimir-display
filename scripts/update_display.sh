@@ -22,6 +22,8 @@ set -euo pipefail
 #   FORCE_SYNC    When set to 1 forces rsync copy regardless of heuristic.
 #   PIP_EXTRAS    Set to "[hyperpixelsq]" / "[inky]" / "[all]" to override extras.
 #   SKIP_PIP      Set to 1 to skip pip install step.
+#   SKIP_PROJECT_INSTALL  Set to 1 (or pass --skip-install) to skip the editable project install ONLY
+#                         while still upgrading pip/setuptools (unless SKIP_PIP=1 as well).
 #
 # Exit codes:
 #   0 success, non-zero on failure.
@@ -37,6 +39,15 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR_DEFAULT="/opt/mimir-display"
 SERVICE_NAME="${SERVICE_NAME:-mimir-display}"
 INSTALL_DIR="${INSTALL_DIR:-}"  # user override
+SKIP_PROJECT_INSTALL="${SKIP_PROJECT_INSTALL:-0}"  # allow env default
+
+# Parse simple CLI flags (no long getopts overhead)
+for arg in "$@"; do
+  case "$arg" in
+    --skip-install|--skip-project-install)
+      SKIP_PROJECT_INSTALL=1 ;;
+  esac
+done
 
 if [[ -z $INSTALL_DIR ]]; then
   if [[ -d $INSTALL_DIR_DEFAULT && -f $INSTALL_DIR_DEFAULT/.env ]]; then
@@ -92,29 +103,42 @@ if [[ ${SKIP_PIP:-0} != 1 ]]; then
   info "Upgrading pip tooling"
   $PYBIN -m pip install --upgrade pip wheel setuptools >/dev/null
   EXTRAS="${PIP_EXTRAS:-}"
-  if [[ -f pyproject.toml ]]; then
-    if [[ -n $EXTRAS ]]; then
-      info "Installing package with extras $EXTRAS"
-      $PYBIN -m pip install -e ".${EXTRAS}" >/dev/null
-    else
-      info "Installing package (no extras override)"
-      $PYBIN -m pip install -e . >/dev/null
-    fi
+  if [[ ${SKIP_PROJECT_INSTALL:-0} == 1 ]]; then
+    info "Skipping project editable install per SKIP_PROJECT_INSTALL flag"
   else
-    warn "pyproject.toml missing; skipping package install"
+    if [[ -f pyproject.toml ]]; then
+      if [[ -n $EXTRAS ]]; then
+        info "Installing package with extras $EXTRAS"
+        $PYBIN -m pip install -e ".${EXTRAS}" >/dev/null
+      else
+        info "Installing package (no extras override)"
+        $PYBIN -m pip install -e . >/dev/null
+      fi
+    else
+      warn "pyproject.toml missing; skipping package install"
+    fi
   fi
 else
   info "Skipping pip install per SKIP_PIP=1"
 fi
 
-# Systemd reload + restart if unit exists
-if systemctl list-units --type=service --all | grep -q "${SERVICE_NAME}.service"; then
-  info "Restarting service ${SERVICE_NAME}.service"
-  sudo systemctl restart "${SERVICE_NAME}.service" || { err "Service restart failed"; exit 4; }
+# Systemd reload + restart if unit exists (robust detection)
+service_unit="${SERVICE_NAME}.service"
+if systemctl status "$service_unit" >/dev/null 2>&1 || systemctl is-active --quiet "$service_unit" || \
+   systemctl list-units --all --full | grep -Fq "$service_unit"; then
+  info "Restarting service $service_unit"
+  if ! sudo systemctl restart "$service_unit"; then
+    err "Service restart failed"
+    # Provide diagnostic hints
+    systemctl status "$service_unit" || true
+    exit 4
+  fi
   sleep 1
-  systemctl --no-pager --lines=5 status "${SERVICE_NAME}.service" || true
+  systemctl --no-pager --lines=8 status "$service_unit" || true
 else
-  warn "Service ${SERVICE_NAME}.service not found; skipping restart"
+  warn "Service $service_unit not detected via status/is-active. Skipping restart."
+  info "Debug: listing matching unit files (may be static/disabled):"
+  systemctl list-unit-files | grep -F "$service_unit" || true
 fi
 
 info "Update complete"
