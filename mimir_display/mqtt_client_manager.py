@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any
 from pathlib import Path
 
 from .config import Config
+import re
 from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService
 from .content import ImageCache, DisplayManager
@@ -48,7 +49,23 @@ class MqttDisplayClientManager:
         self.cache_dir = ensure_dir(os.path.join(self.data_dir, "cache"))
         self.state_path = os.path.join(self.data_dir, "mqtt_state.json")
 
-        # Get hardware capabilities
+        # Normalize device id to hostname slug (always) to ensure topic stability
+        raw_host = self.config.hostname
+        original_id = self.config.display_id  # may be empty or user-provided
+        # slug: lowercase, keep alnum and hyphen, replace spaces/underscores with '-'
+        def _slug(s: str) -> str:
+            s = s.strip().lower().replace(" ", "-").replace("_", "-")
+            s = re.sub(r"[^a-z0-9-]", "", s)
+            s = re.sub(r"-+", "-", s)
+            return s or "display"
+        canonical_id = _slug(raw_host)
+        if original_id and _slug(original_id) != canonical_id:
+            self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO")) if not hasattr(self, 'logger') else self.logger
+            self.logger.info("Overriding display_id '%s' with hostname canonical '%s'", original_id, canonical_id)
+        # Force config display_id to canonical hostname-based slug
+        self.config.set('display_id', canonical_id)
+
+        # Get hardware capabilities (after stable id set)
         self.capabilities = get_display_capabilities()
 
         # Create metadata for registration
