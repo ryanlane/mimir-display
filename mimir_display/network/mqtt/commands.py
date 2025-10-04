@@ -513,11 +513,30 @@ class MqttCommandHandler:
         backoff = 0.75  # seconds
         parsed = urlparse(url)
         original_host = parsed.hostname or ""
+
+        # Pre-resolve .local before first attempt so we don't rely on aiohttp resolver
+        host_header = None
+        if original_host.endswith(".local"):
+            try:
+                resolved_ip = socket.gethostbyname(original_host)
+                host_header = original_host  # preserve logical host for Host header
+                rebuilt = parsed._replace(
+                    netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else "")
+                )
+                url = urlunparse(rebuilt)
+                parsed = rebuilt
+                self.logger.debug(
+                    "Pre-resolved .local hostname %s -> %s", original_host, resolved_ip
+                )
+            except Exception as e:
+                self.logger.debug("Pre-resolution of .local host %s failed: %s", original_host, e)
+
         async with ClientSession() as session:
             last_exc = None
             for i in range(1, attempts + 1):
                 try:
-                    async with session.get(url, timeout=ClientTimeout(total=20)) as resp:
+                    req_headers = {"Host": host_header} if host_header else None
+                    async with session.get(url, timeout=ClientTimeout(total=20), headers=req_headers) as resp:
                         if resp.status >= 500 or resp.status == 429:
                             raise ClientResponseError(
                                 request_info=resp.request_info,

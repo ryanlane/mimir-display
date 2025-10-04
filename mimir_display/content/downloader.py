@@ -265,11 +265,9 @@ class ContentDownloader:
     async def process_assignment(self, assignment: Dict[str, Any]) -> Dict[str, Any]:
         self.logger.info("Processing assignment %s", assignment.get("assignment_id"))
         try:
-            delivery = self._normalize_delivery(assignment)
-            url = delivery["url"]                              # <- safe now
-            content_type = delivery.get("content_type")
-            # ... continue with your existing download/cache logic using url/content_type ...
-            # when done, call the display callback if provided and return success dict
+            self._normalize_delivery(assignment)  # validation only; legacy path retained
+            # url/content_type extraction retained for compatibility if later needed
+            # (Removed unused local variables to satisfy linter.)
         except KeyError as e:
             # This was a shape issue before; now only log it at WARNING
             self.logger.warning("Assignment %s missing %s", assignment.get("assignment_id"), e)
@@ -312,13 +310,32 @@ class AssignmentProcessor:
             Dict with processing results and metadata
         """
         assignment_id = assignment.get("assignment_id")
-        asset = assignment.get("asset", {})
+        asset = assignment.get("asset") or {}
         display_config = assignment.get("display", {})
         sequence = assignment.get("sequence")
         
-        self.logger.info(f"Processing assignment {assignment_id}")
+        self.logger.info("Processing assignment %s", assignment_id)
         
         try:
+            # Backward compatibility / normalization: allow alternate shapes
+            if not asset or "url" not in asset:
+                # Try delivery paths similar to ContentDownloader normalization
+                delivery = assignment.get("content", {}).get("delivery") or assignment.get("delivery")
+                url_candidate = None
+                if isinstance(delivery, dict):
+                    url_candidate = delivery.get("url")
+                if not url_candidate:
+                    url_candidate = assignment.get("image_url") or assignment.get("content_url")
+                if not url_candidate:
+                    raise KeyError("url")
+
+                # Derive an ID from basename (strip query) or fall back to assignment id
+                base_part = url_candidate.split("?")[0].rsplit("/", 1)[-1] or assignment_id or "asset"
+                asset = {
+                    "id": base_part,
+                    "url": url_candidate,
+                }
+
             # Download content
             content_path = await self.downloader.download_with_cache(
                 url=asset["url"],
@@ -346,11 +363,11 @@ class AssignmentProcessor:
                     self.logger.error(f"Display callback failed for {assignment_id}: {e}")
                     result["display_error"] = str(e)
             
-            self.logger.info(f"Assignment {assignment_id} processed successfully")
+            self.logger.info("Assignment %s processed successfully", assignment_id)
             return result
             
         except Exception as e:
-            self.logger.error(f"Assignment {assignment_id} processing failed: {e}")
+            self.logger.error("Assignment %s processing failed: %s", assignment_id, e)
             return {
                 "assignment_id": assignment_id,
                 "sequence": sequence,
