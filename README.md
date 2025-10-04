@@ -117,6 +117,48 @@ The HyperPixel Square does not need a Python driver here; it appears as a Linux 
 
 The installer script will offer to append the overlay line automatically if it is missing. After adding the overlay you must reboot before the framebuffer becomes available.
 
+### Optional: Suppress Console Cursor / Reduce Boot Noise
+
+You can refine the Raspberry Pi boot console experience by editing the kernel command line. This is a *single line* file—be careful not to introduce line breaks.
+
+Common tweaks:
+* `vt.global_cursor_default=0` – hides the blinking text cursor (cleaner for kiosk displays).
+* `loglevel=3` – reduce kernel message verbosity (still shows critical errors).
+* `console=tty2` – keep a secondary console, while the primary framebuffer stays clean (already present in some images).
+
+Example current line you provided (wrapped here for readability):
+
+```
+console=serial0,115200 console=tty2 root=PARTUUID=ac7fcfdd-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=US vt.global_cursor_default=0
+```
+
+If `vt.global_cursor_default=0` is missing, append it *after a space* at the end. Avoid duplicate keys.
+
+#### Steps (Raspberry Pi OS / Bookworm)
+1. Backup the existing file:
+	```bash
+	sudo cp /boot/firmware/cmdline.txt /boot/firmware/cmdline.txt.bak.$(date +%Y%m%d-%H%M%S)
+	```
+	(Older images may use `/boot/cmdline.txt`; check which exists.)
+2. Open for edit (ensure it stays one line):
+	```bash
+	sudo nano /boot/firmware/cmdline.txt
+	```
+3. Append the desired flags (e.g. `vt.global_cursor_default=0 loglevel=3`).
+4. Save and reboot:
+	```bash
+	sudo reboot
+	```
+
+#### Verification
+After reboot, the blinking cursor should be gone and early boot messages minimized. If something breaks (e.g., blank screen), restore the backup:
+```bash
+sudo cp /boot/firmware/cmdline.txt.bak.YYYYMMDD-HHMMSS /boot/firmware/cmdline.txt
+sudo reboot
+```
+
+> Never insert newline characters inside `cmdline.txt`. The kernel treats extra lines as separate/invalid command strings.
+
 Troubleshooting:
 * Run `cat /sys/class/graphics/fb0/virtual_size` → expect `720,720`.
 * Run `cat /sys/class/graphics/fb0/bits_per_pixel` → expect `16`.
