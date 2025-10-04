@@ -75,13 +75,13 @@ case "$BACKEND" in
 esac
 
 PROJECT_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
-if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
-  echo "[+] Installing local source from $PROJECT_ROOT (mimir-display$EXTRA)"
-  pip install "$PROJECT_ROOT$EXTRA"
-else
-  echo "[info] Local source not found; attempting PyPI install mimir-display$EXTRA"
-  pip install "mimir-display$EXTRA"
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+  echo "[error] Could not locate pyproject.toml at $PROJECT_ROOT; this installer only supports local source installs (no PyPI)." >&2
+  echo "Clone or copy the project repo so that 'pyproject.toml' is one directory above 'scripts/'." >&2
+  exit 1
 fi
+echo "[+] Installing local source from $PROJECT_ROOT (mimir-display$EXTRA)"
+pip install "$PROJECT_ROOT$EXTRA"
 
 ENV_FILE=".env"
 if [[ -f $ENV_FILE ]]; then
