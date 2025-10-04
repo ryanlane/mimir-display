@@ -7,13 +7,25 @@ from __future__ import annotations
 
 import os
 import mmap
-import struct
 from typing import Tuple
 from PIL import Image  # type: ignore
 
 FB_PATH = os.environ.get("FRAMEBUFFER", "/dev/fb0")
 SYSFS_BASE = "/sys/class/graphics/fb0"
-_cached_geom: Tuple[int, int, int] | None = None  # (w, h, bpp)
+_cached_geom: tuple[int, int, int] | None = None  # (w, h, bpp)
+
+# --- Configurable RGB565 handling -----------------------------------------
+# Some framebuffer stacks expect little-endian byte order (low byte first) or
+# a BGR channel ordering. We allow runtime overrides via env vars:
+#   HYPERPIXEL_RGB565_ENDIAN  = 'big' | 'little' (default: big)
+#   HYPERPIXEL_RGB565_CHANNEL = 'rgb' | 'bgr'    (default: rgb)
+# Adjust these if colors appear incorrect / rainbow-ish.
+_BYTE_ORDER = os.environ.get("HYPERPIXEL_RGB565_ENDIAN", "big").strip().lower()
+if _BYTE_ORDER not in {"big", "little"}:
+    _BYTE_ORDER = "big"
+_CHANNEL_ORDER = os.environ.get("HYPERPIXEL_RGB565_CHANNEL", "rgb").strip().lower()
+if _CHANNEL_ORDER not in {"rgb", "bgr"}:
+    _CHANNEL_ORDER = "rgb"
 
 
 def _read_sysfs_value(path: str) -> str | None:
@@ -24,7 +36,7 @@ def _read_sysfs_value(path: str) -> str | None:
         return None
 
 
-def _detect_geometry() -> Tuple[int, int, int]:
+def _detect_geometry() -> tuple[int, int, int]:
     global _cached_geom
     if _cached_geom is not None:
         return _cached_geom
@@ -52,7 +64,7 @@ def _detect_geometry() -> Tuple[int, int, int]:
     return _cached_geom
 
 
-def _framebuffer_sizes() -> Tuple[int, int, int, int]:
+def _framebuffer_sizes() -> tuple[int, int, int, int]:
     w, h, bpp = _detect_geometry()
     bytes_per_pixel = 2 if bpp == 16 else max(bpp // 8, 2)
     line_length = w * bytes_per_pixel
@@ -67,16 +79,31 @@ def hardware_available() -> bool:
         return False
 
 
-def get_display_resolution() -> Tuple[int, int]:
+def get_display_resolution() -> tuple[int, int]:
     w, h, _bpp = _detect_geometry()[:3]
     return (w, h)
 
 
+def _pack_rgb565(r: int, g: int, b: int) -> int:
+    """Pack 8-bit per channel RGB into RGB565 integer respecting channel swap."""
+    if _CHANNEL_ORDER == "bgr":  # swap red/blue logical interpretation
+        r, b = b, r
+    return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
+
+
+def _write_word(out: bytearray, idx: int, value: int) -> None:
+    if _BYTE_ORDER == "little":
+        out[idx] = value & 0xFF
+        out[idx + 1] = (value >> 8) & 0xFF
+    else:  # big
+        out[idx] = (value >> 8) & 0xFF
+        out[idx + 1] = value & 0xFF
+
+
 def _convert_to_rgb565(img: Image.Image) -> bytes:
-    """Convert a Pillow RGB/RGBA image to packed RGB565 bytes."""
+    """Convert a Pillow image to packed RGB565 bytes with configurable ordering."""
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
-    # Ensure target size
     w, h, _ = _detect_geometry()
     target = (w, h)
     if img.size != target:
@@ -88,9 +115,8 @@ def _convert_to_rgb565(img: Image.Image) -> bytes:
     for y in range(h):
         for x in range(w):
             r, g, b = px[x, y][:3]
-            rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3)
-            out[i] = (rgb565 >> 8) & 0xFF
-            out[i + 1] = rgb565 & 0xFF
+            rgb565 = _pack_rgb565(r, g, b)
+            _write_word(out, i, rgb565)
             i += 2
     return bytes(out)
 
@@ -146,10 +172,14 @@ def display_test_pattern() -> None:
                         r = (x * 31) // max(1, w - 1)
                         g = (y * 63) // max(1, h - 1)
                         b = ((x + y) * 31) // max(1, (w - 1) + (h - 1))
-                        rgb565 = (r << 11) | (g << 5) | b
+                        rgb565 = _pack_rgb565(r, g, b)
                         off = x * 2
-                        row[off] = (rgb565 >> 8) & 0xFF
-                        row[off + 1] = rgb565 & 0xFF
+                        if _BYTE_ORDER == "little":
+                            row[off] = rgb565 & 0xFF
+                            row[off + 1] = (rgb565 >> 8) & 0xFF
+                        else:
+                            row[off] = (rgb565 >> 8) & 0xFF
+                            row[off + 1] = rgb565 & 0xFF
                     mm.seek(y * w * 2)
                     mm.write(row)
             finally:
@@ -179,6 +209,8 @@ def get_display_capabilities() -> dict:
         "color": True,
         "pixel_format": f"RGB{bpp}",
         "backend": "hyperpixelsq",
+        "rgb565_byte_order": _BYTE_ORDER,
+        "rgb565_channel_order": _CHANNEL_ORDER,
         "detected_fb_geometry": {
             "width": w,
             "height": h,
