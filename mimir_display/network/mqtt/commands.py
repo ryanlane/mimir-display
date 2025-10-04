@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
-import tempfile
 import random
-from pathlib import Path
+import socket
+import tempfile
 from datetime import datetime, timezone
-from typing import Dict, Optional, Callable, Any, TYPE_CHECKING
-from urllib.parse import urlparse
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+from urllib.parse import urlparse, urlunparse
 
 
 # Try to import aiohttp - if not available, we'll handle it gracefully in refresh
@@ -20,8 +23,8 @@ except ImportError:
     ClientResponseError = Exception
     ClientSession = None
     ClientTimeout = None
-from .topics import MqttTopicManager
 from mimir_display.content.downloader import AssignmentProcessor
+from .topics import MqttTopicManager
 
 if TYPE_CHECKING:
     from .events import MqttEventPublisher
@@ -31,7 +34,7 @@ if TYPE_CHECKING:
 class MqttCommandHandler:
     """Handles incoming MQTT commands from the service with assignment processing."""
     
-    def __init__(self, topics: MqttTopicManager, assignment_processor: AssignmentProcessor = None, capabilities: Dict[str, Any] = None, metadata: Dict[str, Any] = None, display_id: str = None, platform_url: str = None):
+    def __init__(self, topics: MqttTopicManager, assignment_processor: AssignmentProcessor | None = None, capabilities: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None, display_id: str | None = None, platform_url: str | None = None):
         self.topics = topics
         self.assignment_processor = assignment_processor
         self.capabilities = capabilities or {}
@@ -39,12 +42,13 @@ class MqttCommandHandler:
         self.display_id = display_id
         self.platform_url = platform_url
         self.logger = logging.getLogger(__name__)
-        self.command_handlers: Dict[str, Callable] = {}
-        self._event_publisher: Optional['MqttEventPublisher'] = None
-        self._mqtt_client: Optional['Client'] = None
-        self._set_scene_cb: Optional[Callable[[str], Any]] = None
-        self._clear_scene_cb: Optional[Callable[[], Any]] = None
-        self._presence_manager: Optional['MqttPresenceManager'] = None
+        self.command_handlers: dict[str, Callable] = {}
+        self._event_publisher: MqttEventPublisher | None = None
+        self._mqtt_client: Client | None = None
+        # set_scene(scene_id, subchannel_id, assignment_id=..., source=...)
+        self._set_scene_cb: Callable[[str, str | None], Any] | None = None
+        self._clear_scene_cb: Callable[..., Any] | None = None
+        self._presence_manager: MqttPresenceManager | None = None
         
         # Register built-in handlers
         self.register_handler("assign", self._handle_assignment)
@@ -57,18 +61,18 @@ class MqttCommandHandler:
         self.register_handler("clear_scene", self._handle_clear_scene)
         
         # Initialize current scene and subchannel IDs
-        self.current_scene_id: Optional[str] = None
-        self.current_subchannel_id: Optional[str] = None
+        self.current_scene_id: str | None = None
+        self.current_subchannel_id: str | None = None
     
-    def set_event_publisher(self, event_publisher: 'MqttEventPublisher'):
+    def set_event_publisher(self, event_publisher: MqttEventPublisher):
         """Set the event publisher for sending responses."""
         self._event_publisher = event_publisher
     
-    def set_presence_manager(self, presence_manager: 'MqttPresenceManager'):
+    def set_presence_manager(self, presence_manager: MqttPresenceManager):
         """Set the presence manager for updating heartbeat fields."""
         self._presence_manager = presence_manager
     
-    def set_mqtt_client(self, client: 'Client'):
+    def set_mqtt_client(self, client: Client):
         """Set the MQTT client for sending registration responses."""
         self._mqtt_client = client
         # Also set the client for the event publisher if available
@@ -83,13 +87,13 @@ class MqttCommandHandler:
     def register_handler(self, command_type: str, handler: Callable):
         """Register a handler for a specific command type."""
         self.command_handlers[command_type] = handler
-        self.logger.info(f"Registered handler for command type: {command_type}")
+    self.logger.info("Registered handler for command type: %s", command_type)
     
-    async def start_listening(self, client: 'Client'):
+    async def start_listening(self, client: Client):
         """Start listening for commands."""
         self.set_mqtt_client(client)  # Store the client for event publishing
         await client.subscribe(self.topics.commands, qos=1)
-        self.logger.info(f"Subscribed to commands at {self.topics.commands}")
+    self.logger.info("Subscribed to commands at %s", self.topics.commands)
         
         async for message in client.messages:
             if message.topic.value == self.topics.commands:
@@ -102,7 +106,9 @@ class MqttCommandHandler:
             command_type = command.get("type") or command.get("action")
             assignment_id = command.get("assignment_id", "unknown")
             
-            self.logger.info(f"Received command: {command_type} (assignment: {assignment_id})")
+            self.logger.info(
+                "Received command: %s (assignment: %s)", command_type, assignment_id
+            )
             
             if command_type in self.command_handlers:
                 handler = self.command_handlers[command_type]
@@ -111,7 +117,7 @@ class MqttCommandHandler:
                 else:
                     handler(command)
             else:
-                self.logger.warning(f"No handler for command type: {command_type}")
+                self.logger.warning("No handler for command type: %s", command_type)
                 # Send error event for unknown command type
                 if self._event_publisher:
                     await self._event_publisher.publish_error(
@@ -121,21 +127,21 @@ class MqttCommandHandler:
                     )
                 
         except json.JSONDecodeError as e:
-            self.logger.error(f"Invalid command JSON: {e}")
+            self.logger.error("Invalid command JSON: %s", e)
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     error_type="invalid_json",
                     message=f"Command payload is not valid JSON: {e}"
                 )
         except Exception as e:
-            self.logger.error(f"Error handling command: {e}")
+            self.logger.error("Error handling command: %s", e)
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     error_type="command_processing",
                     message=f"Command processing failed: {e}"
                 )
     
-    async def _handle_assignment(self, command: Dict[str, Any]):
+    async def _handle_assignment(self, command: dict[str, Any]):
         """Handle assignment command with content download and display."""
         assignment_id = command.get("assignment_id")
         sequence = command.get("sequence")
@@ -169,7 +175,9 @@ class MqttCommandHandler:
                             assignment_id=assignment_id,
                             duration_ms=duration_ms
                         )
-                    self.logger.info(f"Assignment {assignment_id} completed successfully in {duration_ms}ms")
+                    self.logger.info(
+                        "Assignment %s completed successfully in %dms", assignment_id, duration_ms
+                    )
                 else:
                     # Send error event
                     if self._event_publisher:
@@ -179,7 +187,9 @@ class MqttCommandHandler:
                             message=result.get("error", "Assignment processing failed")
                         )
             else:
-                self.logger.warning(f"No assignment processor configured for {assignment_id}")
+                self.logger.warning(
+                    "No assignment processor configured for %s", assignment_id
+                )
                 if self._event_publisher:
                     await self._event_publisher.publish_error(
                         assignment_id=assignment_id,
@@ -188,7 +198,9 @@ class MqttCommandHandler:
                     )
                 
         except Exception as e:
-            self.logger.error(f"Assignment {assignment_id} processing failed: {e}")
+            self.logger.error(
+                "Assignment %s processing failed: %s", assignment_id, e
+            )
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     assignment_id=assignment_id,
@@ -196,7 +208,7 @@ class MqttCommandHandler:
                     message=str(e)
                 )
     
-    async def _handle_set_scene(self, command: Dict[str, Any]):
+    async def _handle_set_scene(self, command: dict[str, Any]):
         """
         Handle set_scene command, storing scene_id and optional subchannel_id,
         and publish assignment acknowledgment.
@@ -205,7 +217,12 @@ class MqttCommandHandler:
         scene_id = command.get("scene_id")
         subchannel_id = command.get("subchannel_id")  # Optional
 
-        self.logger.info(f"Handling set_scene: scene_id={scene_id}, subchannel_id={subchannel_id}, assignment_id={assignment_id}")
+        self.logger.info(
+            "Handling set_scene: scene_id=%s, subchannel_id=%s, assignment_id=%s",
+            scene_id,
+            subchannel_id,
+            assignment_id,
+        )
 
         if not scene_id:
             self.logger.error("set_scene missing scene_id")
@@ -238,7 +255,7 @@ class MqttCommandHandler:
                     subchannel_id=subchannel_id
                 )
         except Exception as e:
-            self.logger.error(f"set_scene failed: {e}", exc_info=True)
+            self.logger.error("set_scene failed: %s", e, exc_info=True)
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     assignment_id=assignment_id,
@@ -246,7 +263,7 @@ class MqttCommandHandler:
                     message=str(e)
                 )
 
-    async def _handle_clear_scene(self, command: Dict[str, Any]):
+    async def _handle_clear_scene(self, command: dict[str, Any]):
         assignment_id = command.get("assignment_id", "clear_scene")
         try:
             if self._clear_scene_cb:
@@ -258,7 +275,7 @@ class MqttCommandHandler:
                     message="scene_id cleared"
                 )
         except Exception as e:
-            self.logger.error(f"clear_scene failed: {e}", exc_info=True)
+            self.logger.error("clear_scene failed: %s", e, exc_info=True)
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     assignment_id=assignment_id,
@@ -266,10 +283,10 @@ class MqttCommandHandler:
                     message=str(e)
                 )
 
-    async def _handle_refresh(self, command: Dict[str, Any]):
+    async def _handle_refresh(self, command: dict[str, Any]):
         """Handle refresh command - the API service should send display_image command with new content."""
         assignment_id = command.get("assignment_id", "refresh")
-        self.logger.info(f"Received refresh command {assignment_id}")
+        self.logger.info("Received refresh command %s", assignment_id)
 
         # Send immediate ACK
         if self._event_publisher:
@@ -290,15 +307,18 @@ class MqttCommandHandler:
                 )
             return
 
-        self.logger.info(f"Refresh acknowledged for scene {self.current_scene_id}. Waiting for API to send display_image command with fresh content.")
+        self.logger.info(
+            "Refresh acknowledged for scene %s. Waiting for API to send display_image command with fresh content.",
+            self.current_scene_id,
+        )
 
-    def set_scene_callbacks(self, set_cb: Callable[[str, Optional[str]], Any], clear_cb: Callable[[], Any]):
+    def set_scene_callbacks(self, set_cb: Callable[[str, str | None], Any], clear_cb: Callable[[], Any]):
         self._set_scene_cb = set_cb
         self._clear_scene_cb = clear_cb
     
-    async def _handle_register_request(self, command: Dict[str, Any]):
+    async def _handle_register_request(self, command: dict[str, Any]):
         """Handle registration request from API service - send our details back."""
-        self.logger.info(f"Received registration request from API: {command}")
+        self.logger.info("Received registration request from API: %s", command)
         
         reply_to = command.get("reply_to")
         if not reply_to:
@@ -318,8 +338,8 @@ class MqttCommandHandler:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
-            self.logger.info(f"Sending registration details to {reply_to}")
-            self.logger.debug(f"Registration data: {registration_data}")
+            self.logger.info("Sending registration details to %s", reply_to)
+            self.logger.debug("Registration data: %s", registration_data)
             
             # Send registration response via MQTT
             await self._mqtt_client.publish(
@@ -330,150 +350,146 @@ class MqttCommandHandler:
             
             self.logger.info("Registration details sent successfully")
                 
-        except Exception as e:
-            self.logger.error(f"Error handling registration request: {e}")
+        except Exception as e:  # broad: network / serialization errors
+            self.logger.error("Error handling registration request: %s", e)
     
-    async def _handle_ready(self, command: Dict[str, Any]):
-        """Handle ready acknowledgment from API - display is registered and ready."""
-        self.logger.info(f"Received ready acknowledgment: {command}")
-        
-        display_id = command.get("display_id")
-        message = command.get("message", "Ready")
-        
-        self.logger.info(f"Display ready - ID: {display_id}, Message: {message}")
-        
-        # Send acknowledgment back
+    async def _handle_ready(self, command: dict[str, Any]):
+        """Handle ready acknowledgment from API - device confirms it is operational.
+
+        This command does not currently trigger any display action; it simply acknowledges
+        registration/handshake steps. Additional fields in the payload are ignored but logged.
+        """
+        self.logger.info("Received ready acknowledgment: %s", command)
         if self._event_publisher:
             await self._event_publisher.publish_ack(
                 assignment_id=command.get("assignment_id", "ready"),
                 success=True,
-                message="Ready acknowledgment received"
+                message=command.get("message", "Ready acknowledgment received")
             )
     
-    async def _handle_registration_complete(self, command: Dict[str, Any]):
-        """Handle registration complete confirmation from API."""
-        self.logger.info(f"Registration complete: {command}")
-        
+    async def _handle_registration_complete(self, command: dict[str, Any]):
+        """Handle registration complete confirmation from API.
+
+        Logs final registration success and sends an ACK back to the service.
+        """
+        self.logger.info("Registration complete: %s", command)
         display_id = command.get("display_id")
         message = command.get("message", "Registration complete")
-        
-        self.logger.info(f"Registration successful - ID: {display_id}, Message: {message}")
-        
-        # Send acknowledgment back
+        self.logger.info(
+            "Registration successful - ID: %s, Message: %s", display_id, message
+        )
         if self._event_publisher:
             await self._event_publisher.publish_ack(
                 assignment_id=command.get("assignment_id", "registration_complete"),
                 success=True,
-                message="Registration completion acknowledged"
+                message=message,
             )
-    
-    
 
-    def _pretty_display_target(self, image_url: str, max_len: int = 140) -> str:
-        """
-        Prefer the URL's basename if present; otherwise show the full URL (trimmed).
+    # ---------------------------------------------------------------------
+    # Display Image Handling
+    # ---------------------------------------------------------------------
+    def _pretty_display_target(self, image_url: str, max_len: int = 64) -> str:
+        """Return a short human-friendly target string for ACK messages.
+
+        Attempts to use the basename of the path; falls back to the whole URL.
+        Truncates overly long names for readability.
         """
         try:
             parsed = urlparse(image_url)
-            # Try to show just the last path segment if it exists (nicer than a long URL)
             basename = parsed.path.rsplit("/", 1)[-1] if parsed.path else ""
             target = basename or image_url
         except Exception:
             target = image_url
-
         if len(target) > max_len:
             return target[: max_len - 1] + "…"
         return target
 
-    async def _handle_display_image(self, command: Dict[str, Any]):
-        """Handle display image command: download the image and render it to hardware."""
-        self.logger.info("Received display image command: %s", command)
+    async def _handle_display_image(self, command: dict[str, Any]):
+        """Handle a display_image command.
 
+        Strategy:
+        1. Attempt normal assignment processing by synthesising a minimal assignment
+           structure that the existing AssignmentProcessor understands.
+        2. If that fails (KeyError / other), fall back to a direct download + render.
+        """
+        self.logger.info("Received display image command: %s", command)
         assignment_id = command.get("assignment_id", "display_image")
-        image_url = command.get("image_url")
+        image_url = command.get("image_url") or command.get("url")
 
         if not image_url:
-            self.logger.error("Display image command missing image_url")
+            self.logger.error("display_image missing image_url/url")
             if self._event_publisher:
                 await self._event_publisher.publish_error(
                     assignment_id=assignment_id,
                     error_type="display_error",
-                    message="Missing image_url in display command",
+                    message="Missing image_url/url in display_image command",
                 )
             return
 
-        # Immediate ACK so UI is responsive — show URL/basename instead of "Test Image"
+        # Immediate optimistic ACK (lets UI show progress quickly)
         if self._event_publisher:
+            target_msg = "Displaying: %s" % self._pretty_display_target(image_url)
             await self._event_publisher.publish_ack(
                 assignment_id=assignment_id,
                 success=True,
-                message=f"Displaying: {self._pretty_display_target(image_url)}",
+                message=target_msg,
             )
 
-        # Prefer the normal assignment pipeline (Downloader -> display_callback)
+        # Preferred path: reuse assignment processor so pipelines (caching, scaling, etc.) apply.
         if self.assignment_processor:
-            start = datetime.now()
+            start_time = datetime.now()
             try:
-                pseudo = {
+                pseudo_assignment = {
                     "assignment_id": assignment_id,
                     "content": {"delivery": {"type": "url", "url": image_url}},
                 }
-                result = await self.assignment_processor.process_assignment(pseudo)
-                dur = int((datetime.now() - start).total_seconds() * 1000)
+                result = await self.assignment_processor.process_assignment(pseudo_assignment)
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
                 if not result.get("success"):
-                    # Second attempt: top-level delivery
-                    pseudo_alt = {
+                    # Retry with top-level delivery variant some older code accepted.
+                    alt_assignment = {
                         "assignment_id": assignment_id,
                         "delivery": {"type": "url", "url": image_url},
                     }
-                    result = await self.assignment_processor.process_assignment(pseudo_alt)
+                    result = await self.assignment_processor.process_assignment(alt_assignment)
 
                 if result.get("success"):
                     if self._event_publisher:
                         await self._event_publisher.publish_rendered(
-                            assignment_id=assignment_id, duration_ms=dur
+                            assignment_id=assignment_id, duration_ms=duration_ms
                         )
-                    self.logger.info("Displayed image successfully in %dms", dur)
+                    self.logger.info(
+                        "Displayed image via assignment pipeline in %dms", duration_ms
+                    )
                     return
                 else:
-                    level = (
-                        self.logger.info
-                        if result.get("error_type") == "KeyError"
-                        else self.logger.warning
+                    self.logger.warning(
+                        "Assignment processor failed (result=%s); falling back to direct download",
+                        result,
                     )
-                    level("Assignment processor returned failure, falling back: %s", result)
-
             except KeyError as e:
-                # Classic signature mismatch (e.g., missing ['url'] where downloader expected it)
                 self.logger.warning(
-                    "process_assignment KeyError %s, falling back to direct download", e
+                    "Assignment processor KeyError %s; falling back to direct download", e
                 )
             except Exception as e:
                 self.logger.exception(
-                    "process_assignment failed (%s), falling back to direct download", e
+                    "Assignment processor exception (%s); falling back to direct download", e
                 )
 
-        # Fallback: direct async download → render
+        # Fallback path: direct download then render with display callback.
         try:
-            start = datetime.now()
-            path = await self._download_to_temp(image_url)
-            await self._render_local_file(path)
-            dur = int((datetime.now() - start).total_seconds() * 1000)
-
+            start_time = datetime.now()
+            tmp_path = await self._download_to_temp(image_url)
+            await self._render_local_file(tmp_path)
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             if self._event_publisher:
                 await self._event_publisher.publish_rendered(
-                    assignment_id=assignment_id, duration_ms=dur
+                    assignment_id=assignment_id, duration_ms=duration_ms
                 )
-            self.logger.info("Displayed image via fallback in %dms (path=%s)", dur, path)
-
-            # Optional: send a follow-up info message with the local path (uncomment if you have such an event)
-            # if self._event_publisher and hasattr(self._event_publisher, "publish_info"):
-            #     await self._event_publisher.publish_info(
-            #         assignment_id=assignment_id,
-            #         message=f"Rendered local path: {path}",
-            #     )
-
+            self.logger.info(
+                "Displayed image via direct fallback in %dms (path=%s)", duration_ms, tmp_path
+            )
         except Exception as e:
             self.logger.exception("display_image fallback failed: %s", e)
             if self._event_publisher:
@@ -485,15 +501,23 @@ class MqttCommandHandler:
 
 
     async def _download_to_temp(self, url: str) -> Path:
-        """Download URL to a temp file asynchronously with retries."""
+        """Download URL to a temp file asynchronously with retries and .local fallback.
+
+        If aiohttp isn't available we raise immediately; the higher-level handler will
+        surface the error as a display_exception event.
+        """
+        if not AIOHTTP_AVAILABLE:
+            raise RuntimeError("aiohttp not installed; cannot download image")
+
         attempts = 3
         backoff = 0.75  # seconds
+        parsed = urlparse(url)
+        original_host = parsed.hostname or ""
         async with ClientSession() as session:
             last_exc = None
             for i in range(1, attempts + 1):
                 try:
                     async with session.get(url, timeout=ClientTimeout(total=20)) as resp:
-                        # Retry on 5xx / 429
                         if resp.status >= 500 or resp.status == 429:
                             raise ClientResponseError(
                                 request_info=resp.request_info,
@@ -519,11 +543,26 @@ class MqttCommandHandler:
                     last_exc = e
                     if i == attempts:
                         break
-                    # jittered backoff
                     await asyncio.sleep(backoff * (1 + random.random() * 0.3))
                     backoff *= 1.6
-            # All retries failed
-            raise last_exc
+                except Exception as e:
+                    last_exc = e
+                    if i < attempts and original_host.endswith(".local"):
+                        try:
+                            resolved_ip = socket.gethostbyname(original_host)
+                            self.logger.info(
+                                "Resolved .local hostname %s -> %s (retrying)",
+                                original_host,
+                                resolved_ip,
+                            )
+                            rebuilt = parsed._replace(
+                                netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else "")
+                            )
+                            url = urlunparse(rebuilt)
+                            continue  # retry immediately with rebuilt URL
+                        except Exception as re:
+                            self.logger.debug("Manual .local resolution failed: %s", re)
+            raise last_exc  # All retries exhausted
 
     async def _render_local_file(self, path: Path) -> None:
         """Call the same display callback path the assignment processor uses."""
