@@ -74,8 +74,14 @@ case "$BACKEND" in
   auto) EXTRA="[all]" ;;
 esac
 
-echo "[+] Installing mimir-display$EXTRA"
-pip install mimir-display$EXTRA
+PROJECT_ROOT="$(cd "$(dirname "$0")"/.. && pwd)"
+if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+  echo "[+] Installing local source from $PROJECT_ROOT (mimir-display$EXTRA)"
+  pip install "$PROJECT_ROOT$EXTRA"
+else
+  echo "[info] Local source not found; attempting PyPI install mimir-display$EXTRA"
+  pip install "mimir-display$EXTRA"
+fi
 
 ENV_FILE=".env"
 if [[ -f $ENV_FILE ]]; then
