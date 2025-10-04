@@ -95,6 +95,10 @@ else
     else
       echo "[info] Elevated permissions required to create $INSTALL_DIR" >&2
       sudo mkdir -p "$INSTALL_DIR"
+      # If script wasn't launched with sudo, SUDO_USER is empty; ensure we chown to invoking user.
+      if [[ -z ${SUDO_USER:-} ]]; then
+        sudo chown -R "$USER":"$USER" "$INSTALL_DIR" 2>/dev/null || true
+      fi
     fi
   fi
   echo "[+] Will perform a copy/deploy install to $INSTALL_DIR" >&2
@@ -107,6 +111,9 @@ else
     # Adjust ownership to invoking (non-root) user if SUDO_USER exists
     if [[ -n ${SUDO_USER:-} ]]; then
       sudo chown -R "$SUDO_USER":"$SUDO_USER" "$INSTALL_DIR" 2>/dev/null || true
+    else
+      # Fallback: chown to current user when script itself invoked without sudo but needs sudo internally
+      sudo chown -R "$USER":"$USER" "$INSTALL_DIR" 2>/dev/null || true
     fi
   fi
 fi
