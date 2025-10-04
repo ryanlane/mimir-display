@@ -80,9 +80,27 @@ if [[ $MODE_CHOICE == 1 ]]; then
 else
   read -rp "Install path (directory) [/opt/mimir-display]: " INSTALL_DIR
   INSTALL_DIR=${INSTALL_DIR:-/opt/mimir-display}
-  mkdir -p "$INSTALL_DIR"
+  # If directory requires privilege, create with sudo
+  if [[ ! -d $INSTALL_DIR ]]; then
+    if mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+      :
+    else
+      echo "[info] Elevated permissions required to create $INSTALL_DIR" >&2
+      sudo mkdir -p "$INSTALL_DIR"
+    fi
+  fi
   echo "[+] Will perform a copy/deploy install to $INSTALL_DIR" >&2
-  rsync -a --exclude '.venv' --exclude '.git' "$PROJECT_ROOT/" "$INSTALL_DIR/"
+  RSYNC_CMD=(rsync -a --delete --exclude '.venv' --exclude '.git')
+  if [[ -w $INSTALL_DIR ]]; then
+    "${RSYNC_CMD[@]}" "$PROJECT_ROOT/" "$INSTALL_DIR/"
+  else
+    echo "[info] Using sudo for rsync into $INSTALL_DIR" >&2
+    sudo "${RSYNC_CMD[@]}" "$PROJECT_ROOT/" "$INSTALL_DIR/"
+    # Adjust ownership to invoking (non-root) user if SUDO_USER exists
+    if [[ -n ${SUDO_USER:-} ]]; then
+      sudo chown -R "$SUDO_USER":"$SUDO_USER" "$INSTALL_DIR" 2>/dev/null || true
+    fi
+  fi
 fi
 
 cd "$INSTALL_DIR"
