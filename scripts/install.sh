@@ -15,6 +15,7 @@ ETC_DIR="/etc/mimir-display"
 SERVICE_FILE_SOURCE="packaging/mimir-display.service"
 SERVICE_FILE_TARGET="/etc/systemd/system/mimir-display.service"
 DEFAULT_STATE_SUBDIR="state"
+ORIENTATION=""   # optional: landscape|portrait_left|portrait_right
 
 # Legacy Pi Zero (armv6) handling
 LEGACY_MODE=0           # auto-detected or via --legacy-zero
@@ -34,7 +35,8 @@ while [[ $# -gt 0 ]]; do
     --prefix) PREFIX="$2"; VENV_DIR="$PREFIX/venv"; shift 2;;
     --python) PYTHON_BIN="$2"; shift 2;;
     --legacy-zero) LEGACY_MODE=1; shift 1;;
-    --install-system-deps) INSTALL_SYSTEM_DEPS=1; shift 1;;
+  --install-system-deps) INSTALL_SYSTEM_DEPS=1; shift 1;;
+  --orientation) ORIENTATION="$2"; shift 2;;
     *) err "Unknown arg: $1"; exit 1;;
   esac
 done
@@ -167,11 +169,37 @@ place_env() {
 # MQTT_BROKER_HOST=broker
 # MQTT_BROKER_PORT=1883
 # DISPLAY_ID=auto
+# DISPLAY_ORIENTATION=landscape   # or portrait_left / portrait_right
 # MIMIR_STATE_DIR=$WORK_DIR/$DEFAULT_STATE_SUBDIR
 # MIMIR_CACHE_DIR=$WORK_DIR/cache
 EOF
     chown $SERVICE_USER:$SERVICE_USER "$ETC_DIR/.env"
     chmod 0640 "$ETC_DIR/.env"
+  fi
+  # If orientation provided, validate & set (update or append)
+  if [[ -n "$ORIENTATION" ]]; then
+    case "$ORIENTATION" in
+      landscape|portrait_left|portrait_right) : ;; 
+      *) warn "Invalid --orientation value '$ORIENTATION'; ignoring"; ORIENTATION="" ;;
+    esac
+  else
+    # If interactive TTY and not specified, prompt
+    if [[ -t 0 ]]; then
+      read -rp "Display orientation (landscape|portrait_left|portrait_right) [landscape]: " ORI_IN || true
+      ORI_IN=${ORI_IN:-landscape}
+      case "$ORI_IN" in
+        landscape|portrait_left|portrait_right) ORIENTATION="$ORI_IN" ;;
+        *) warn "Invalid orientation '$ORI_IN'; using landscape"; ORIENTATION="landscape" ;;
+      esac
+    fi
+  fi
+  if [[ -n "$ORIENTATION" ]]; then
+    if grep -q '^DISPLAY_ORIENTATION=' "$ETC_DIR/.env"; then
+      sed -i "s/^DISPLAY_ORIENTATION=.*/DISPLAY_ORIENTATION=${ORIENTATION}/" "$ETC_DIR/.env"
+    else
+      echo "DISPLAY_ORIENTATION=${ORIENTATION}" >> "$ETC_DIR/.env"
+    fi
+    info "Orientation set to ${ORIENTATION}"
   fi
 }
 

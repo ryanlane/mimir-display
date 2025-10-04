@@ -183,6 +183,22 @@ fi
 grep -q '^DISPLAY_BACKEND=' .env || echo "DISPLAY_BACKEND=${BACKEND}" >> .env
 grep -q '^LOG_LEVEL=' .env || echo "LOG_LEVEL=INFO" >> .env
 
+# ----------------------------------------------
+# Orientation prompt (new)
+# ----------------------------------------------
+read -rp "Display orientation (landscape|portrait_left|portrait_right) [landscape]: " ORIENTATION_INPUT || true
+ORIENTATION_INPUT=${ORIENTATION_INPUT:-landscape}
+case "$ORIENTATION_INPUT" in
+  landscape|portrait_left|portrait_right) : ;; 
+  *) echo "[warn] Invalid orientation '$ORIENTATION_INPUT'; defaulting to landscape" >&2; ORIENTATION_INPUT=landscape ;;
+esac
+if grep -q '^DISPLAY_ORIENTATION=' .env; then
+  sed -i "s/^DISPLAY_ORIENTATION=.*/DISPLAY_ORIENTATION=${ORIENTATION_INPUT}/" .env
+else
+  echo "DISPLAY_ORIENTATION=${ORIENTATION_INPUT}" >> .env
+fi
+echo "[+] Orientation set to ${ORIENTATION_INPUT} (rotate content automatically)" >&2
+
 if [[ $BACKEND == "hyperpixelsq" ]]; then
   # Attempt to detect Raspberry Pi boot config location (varies between distros)
   BOOT_CANDIDATES=(/boot/firmware/config.txt /boot/config.txt)

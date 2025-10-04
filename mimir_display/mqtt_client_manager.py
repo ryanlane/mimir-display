@@ -68,6 +68,21 @@ class MqttDisplayClientManager:
         # Get hardware capabilities (after stable id set)
         self.capabilities = get_display_capabilities()
 
+        # Optional: display startup logo/image centered before any network activity.
+        # This provides immediate visual feedback that the client launched.
+        try:
+            # Use provided image path (env override STARTUP_LOGO_PATH) or built-in resource.
+            startup_logo = os.environ.get("STARTUP_LOGO_PATH") or os.path.join(os.path.dirname(__file__), "images", "startup.png")
+            if os.path.exists(startup_logo):
+                # Use a lightweight on-demand DisplayManager instance after capabilities retrieval.
+                tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
+                tmp_dm.display_from_file(startup_logo)
+                self.logger.info("Startup logo displayed (%s)", startup_logo)
+            else:
+                self.logger.debug("No startup logo found at %s", startup_logo)
+        except Exception as e:  # noqa: BLE001 - non-fatal
+            self.logger.debug("Startup logo display failed: %s", e, exc_info=True)
+
         # Optional startup test pattern for non e-ink framebuffer displays.
         # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
         if os.environ.get("STARTUP_TEST_PATTERN") == "1":
