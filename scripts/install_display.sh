@@ -54,6 +54,14 @@ fi
 BACKEND="${OPTIONS[$((CHOICE-1))]}"
 echo "[+] Selected backend: $BACKEND" >&2
 
+# Determine extra early (needed for armv6 numpy logic below)
+EXTRA=""
+case "$BACKEND" in
+  inky) EXTRA="[inky]" ;;
+  hyperpixelsq) EXTRA="[hyperpixelsq]" ;;
+  auto) EXTRA="[all]" ;;
+esac
+
 SCRIPT_PATH="$0"
 # When invoked via 'bash scripts/install_display.sh' $0 may be 'scripts/install_display.sh' or relative path.
 if [[ ! -f "$SCRIPT_PATH" ]]; then
@@ -151,12 +159,6 @@ fi
 source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 
-EXTRA=""
-case "$BACKEND" in
-  inky) EXTRA="[inky]" ;;
-  hyperpixelsq) EXTRA="[hyperpixelsq]" ;;
-  auto) EXTRA="[all]" ;;
-esac
 
 if [[ ! -f "pyproject.toml" ]]; then
   echo "[error] pyproject.toml not found in $INSTALL_DIR; aborting." >&2
