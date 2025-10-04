@@ -5,8 +5,6 @@ import os
 import logging
 import importlib.util
 import traceback
-import warnings
-from datetime import datetime
 from dotenv import load_dotenv
 
 
@@ -30,17 +28,54 @@ if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):  # manu
 
 inky = None
 _inky_init_error = None
-if not use_fake:
+_inky_initialized = False
+
+def _want_inky_backend() -> bool:
+    """Determine if the inky backend is actually requested.
+
+    We only attempt hardware initialization (and therefore only emit warnings)
+    if the process explicitly selected or autodetected the inky backend.
+    Signals (checked in order):
+      1. BACKEND env var equals 'inky' (case-insensitive)
+      2. FORCE_INKY_HARDWARE explicitly set
+      3. No other backend forced AND no framebuffer hardware present (heuristic)
+    """
+    backend_env = os.getenv("BACKEND", "").strip().lower()
+    if backend_env == "inky":
+        return True
+    if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+        return True
+    # Heuristic: if a framebuffer path exists and is writable, likely not inky; don't auto-init.
+    fb_path = os.getenv("FRAMEBUFFER", "/dev/fb0")
+    if os.path.exists(fb_path) and os.access(fb_path, os.W_OK):
+        return False
+    # Otherwise defer to environment development indicators; only try if not explicitly dev fake.
+    return not is_dev_mode()
+
+
+def _init_inky_if_needed():
+    global inky, _inky_init_error, _inky_initialized, use_fake
+    if _inky_initialized:
+        return
+    _inky_initialized = True
+    if use_fake:
+        return  # Respect explicit dev/fake choice without logging noise.
+    if not _want_inky_backend():
+        # Backend not selected; remain silent and in lazy state.
+        return
     try:
-        from inky.auto import auto
+        from inky.auto import auto  # type: ignore
         inky = auto(ask_user=False, verbose=False)  # Don't ask user in non-interactive mode
     except ImportError as ie:
         _inky_init_error = ie
-        print("Warning: inky package not installed or failed to import, running in fake mode")
+        # Only warn if user explicitly asked for inky.
+        if os.getenv("BACKEND", "").lower() == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+            print("Warning: inky package not installed or failed to import, running in fake mode")
         use_fake = True
     except Exception as e:
         _inky_init_error = e
-        print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
+        if os.getenv("BACKEND", "").lower() == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+            print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
         use_fake = True
 
 if use_fake and os.getenv("DEBUG_INKY_IMPORT", "").lower() in ("1", "true", "yes"):
@@ -96,6 +131,7 @@ def get_inky_resolution():
         return (int(override[0]), int(override[1]))
 
     # 2) Hardware
+    _init_inky_if_needed()
     if not use_fake and inky is not None:
         try:
             res = getattr(inky, "resolution", None)
@@ -122,11 +158,13 @@ def get_inky_resolution():
     return (800, 480)
 
 def get_inky_colour_variant():
+    _init_inky_if_needed()
     if use_fake or inky is None:
         return os.getenv("FAKE_INKY_COLOR", "simulated")
     return getattr(inky, "colour", getattr(inky, "color", "unknown"))
 
 def show_on_inky(imagepath):
+    _init_inky_if_needed()
     if use_fake or inky is None:
         logger.info("[DEV] Would display: %s", imagepath)
         return
