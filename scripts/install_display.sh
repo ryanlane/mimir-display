@@ -14,11 +14,25 @@ detect_backend() {
   if [[ ${FORCE_INKY:-} == 1 ]]; then
     echo "inky"; return
   fi
+  if [[ ${FORCE_RGBMATRIX:-} == 1 ]]; then
+    echo "rgbmatrix"; return
+  fi
   if [[ -e /dev/fb0 ]]; then
     local virt="$(grep -s '' /sys/class/graphics/fb0/virtual_size || true)"
     local bpp="$(grep -s '' /sys/class/graphics/fb0/bits_per_pixel || true)"
     if [[ $virt == "720,720" && ( -z $bpp || $bpp == 16 ) ]]; then
       echo "hyperpixelsq"; return
+    fi
+  fi
+  # Try probing for rgbmatrix Python binding (best-effort, quiet)
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 - <<'PY' 2>/dev/null; then
+import importlib, os
+mod = importlib.util.find_spec('rgbmatrix')
+raise SystemExit(0 if mod else 1)
+PY
+    then
+      echo "rgbmatrix"; return
     fi
   fi
   echo "inky"
@@ -34,7 +48,7 @@ LABELS=()
 OPTIONS+=("$SUGGESTED")
 LABELS+=("$SUGGESTED (detected)")
 
-for opt in hyperpixelsq inky auto; do
+for opt in hyperpixelsq rgbmatrix inky auto; do
   if [[ $opt != "$SUGGESTED" ]]; then
     OPTIONS+=("$opt")
     LABELS+=("$opt")
@@ -59,6 +73,7 @@ EXTRA=""
 case "$BACKEND" in
   inky) EXTRA="[inky]" ;;
   hyperpixelsq) EXTRA="[hyperpixelsq]" ;;
+  rgbmatrix) EXTRA="[rgbmatrix]" ;;
   auto) EXTRA="[all]" ;;
 esac
 
