@@ -73,6 +73,20 @@ def _init_inky_if_needed():
     if not _want_inky_backend():
         # Backend not selected; remain silent and in lazy state.
         return
+    # Optional: ignore pin busy checks if user opts in (e.g. SPI controller legitimately owns CS0)
+    ignore_pin_busy = os.getenv("INKY_IGNORE_PIN_BUSY", "").lower() in ("1", "true", "yes")
+    patched_pin_check = False
+    if ignore_pin_busy:
+        try:  # Lazy/defensive – only patch if gpiodevice available
+            import gpiodevice  # type: ignore
+            if hasattr(gpiodevice, "check_pins_available"):
+                _orig_check = gpiodevice.check_pins_available  # type: ignore
+                def _noop_check(*_a, **_k):
+                    return False  # "pins not busy" signal
+                gpiodevice.check_pins_available = _noop_check  # type: ignore
+                patched_pin_check = True
+        except Exception:
+            pass
     try:
         from inky.auto import auto  # type: ignore
         inky = auto(ask_user=False, verbose=False)  # Don't ask user in non-interactive mode
@@ -86,9 +100,25 @@ def _init_inky_if_needed():
     except Exception as e:
         _inky_init_error = e
         backend_env_local = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
-        if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
-            print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
-        use_fake = True
+        # Second-chance retry: if failure looks like pin contention and we have not yet patched, attempt patch+retry
+        msg = str(e).lower()
+        retry_done = False
+        if ("pin" in msg or "busy" in msg or "in use" in msg) and ignore_pin_busy and not patched_pin_check:
+            try:
+                import gpiodevice  # type: ignore
+                if hasattr(gpiodevice, "check_pins_available"):
+                    def _noop_check(*_a, **_k):
+                        return False
+                    gpiodevice.check_pins_available = _noop_check  # type: ignore
+                    from inky.auto import auto  # type: ignore
+                    inky = auto(ask_user=False, verbose=False)
+                    retry_done = True
+            except Exception:
+                pass
+        if not retry_done:
+            if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+                print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
+            use_fake = True
 
 if use_fake and os.getenv("DEBUG_INKY_IMPORT", "").lower() in ("1", "true", "yes"):
     print("[INKY DEBUG] use_fake=True. Environment details:")
