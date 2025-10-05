@@ -1,15 +1,16 @@
 import asyncio
-import os
-import json
-import socket
-import hashlib
-import logging
-import time
-import random
 import contextlib
-from typing import Dict, Optional, Callable, Any
-from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+import os
+import random
+import socket
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Optional
+
 from aiomqtt import Client
 
 from .topics import MqttTopicManager
@@ -35,9 +36,9 @@ class MqttDisplayClient:
         # Initialize components
         self.topics = MqttTopicManager(self.device_id)
         self.registration = MqttRegistrationManager(
-            self.topics, 
-            capabilities, 
-            metadata
+            self.topics,
+            capabilities,
+            metadata,
         )
 
         # Initialize content processing
@@ -99,16 +100,59 @@ class MqttDisplayClient:
           mqtt_watchdog_idle_warn   (int/float)  default 45s (warn if no message/event for this long)
           mqtt_watchdog_idle_error  (int/float)  default 120s (error log if exceeded)
         """
-        get = getattr(self.config, 'get')
-        return {
-            'base_delay': float(get('mqtt_reconnect_base_delay', 2)),
-            'max_delay': float(get('mqtt_reconnect_max_delay', 60)),
-            'jitter_frac': float(get('mqtt_reconnect_jitter', 0.25)),
-            'log_every': int(get('mqtt_reconnect_log_every', 5)),
-            'watchdog_interval': float(get('mqtt_watchdog_interval', 15)),
-            'idle_warn': float(get('mqtt_watchdog_idle_warn', 45)),
-            'idle_error': float(get('mqtt_watchdog_idle_error', 120)),
+        get = self.config.get
+
+        # Helper to read env with fallbacks, allowing either env var or config key (lowercase form)
+        def _num(env_key: str, cfg_key: str, default: float, cast):
+            raw = os.getenv(env_key.upper())
+            if raw is None:
+                raw = get(cfg_key, default)
+            try:
+                return cast(raw)
+            except Exception:  # noqa: BLE001 - defensive; fallback to default
+                self.logger.warning(
+                    "Invalid value for %s=%r falling back to default %.2f", env_key, raw, default
+                )
+                return default
+
+        settings = {
+            'base_delay': _num('MQTT_RECONNECT_BASE_DELAY', 'mqtt_reconnect_base_delay', 2.0, float),
+            'max_delay': _num('MQTT_RECONNECT_MAX_DELAY', 'mqtt_reconnect_max_delay', 60.0, float),
+            'jitter_frac': _num('MQTT_RECONNECT_JITTER', 'mqtt_reconnect_jitter', 0.25, float),
+            'log_every': _num('MQTT_RECONNECT_LOG_EVERY', 'mqtt_reconnect_log_every', 5, int),
+            'watchdog_interval': _num('MQTT_WATCHDOG_INTERVAL', 'mqtt_watchdog_interval', 15.0, float),
+            'idle_warn': _num('MQTT_WATCHDOG_IDLE_WARN', 'mqtt_watchdog_idle_warn', 45.0, float),
+            'idle_error': _num('MQTT_WATCHDOG_IDLE_ERROR', 'mqtt_watchdog_idle_error', 120.0, float),
         }
+
+        # Clamp / sanity adjustments
+        if settings['jitter_frac'] < 0 or settings['jitter_frac'] > 1:
+            self.logger.warning(
+                "mqtt_reconnect_jitter out of range (0..1) %.2f -> clamping", settings['jitter_frac']
+            )
+            settings['jitter_frac'] = max(0.0, min(1.0, settings['jitter_frac']))
+        if settings['idle_warn'] >= settings['idle_error']:
+            self.logger.warning(
+                "MQTT idle warn %.1fs >= error %.1fs; adjusting warn to 75%% of error", settings['idle_warn'], settings['idle_error']
+            )
+            settings['idle_warn'] = settings['idle_error'] * 0.75
+        if settings['watchdog_interval'] <= 0:
+            self.logger.warning(
+                "MQTT watchdog interval %.2f invalid; using 15s", settings['watchdog_interval']
+            )
+            settings['watchdog_interval'] = 15.0
+
+        self.logger.info(
+            "MQTT resilience config base=%.1fs max=%.1fs jitter=%.2f log_every=%d watchdog=%.1fs warn=%.1fs error=%.1fs",
+            settings['base_delay'],
+            settings['max_delay'],
+            settings['jitter_frac'],
+            settings['log_every'],
+            settings['watchdog_interval'],
+            settings['idle_warn'],
+            settings['idle_error'],
+        )
+        return settings
 
     def _derive_state_path(self) -> str:
         # Try to use your configured data dir; fall back to /tmp
@@ -120,7 +164,7 @@ class MqttDisplayClient:
         """Load previously persisted assignment state (if any)."""
         try:
             if os.path.exists(self._state_path):  # noqa: BLE001 - defensive load
-                with open(self._state_path, "r", encoding="utf-8") as f:
+                with open(self._state_path, encoding="utf-8") as f:
                     data = json.load(f)
                 self._assigned_scene_id = data.get("scene_id")
                 self._assigned_subchannel_id = data.get("subchannel_id")
@@ -434,13 +478,8 @@ class MqttDisplayClient:
                 attempt += 1
                 full_tb = (attempt == 1) or (attempt % cfg['log_every'] == 0)
                 log_msg = (
-                    "MQTT reconnect needed attempt=%d reason=%s device_id=%s host=%s port=%s" % (
-                        attempt,
-                        reason,
-                        self.device_id,
-                        self.config.mqtt_broker_host,
-                        self.config.mqtt_broker_port,
-                    )
+                    f"MQTT reconnect needed attempt={attempt} reason={reason} device_id={self.device_id} "
+                    f"host={self.config.mqtt_broker_host} port={self.config.mqtt_broker_port}"
                 )
                 if full_tb:
                     self.logger.error("%s error=%r", log_msg, e, exc_info=True)
