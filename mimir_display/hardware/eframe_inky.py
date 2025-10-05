@@ -1,116 +1,91 @@
-# hardware/eframe_inky.py
+# hardware/eframe_inky.py (simplified)
 
-import os
-import sys
-import logging
+"""Inky display backend.
+
+Simplified design goals:
+  * Single flag `simulation_mode` (True only if ENVIRONMENT=development|dev OR init fails).
+  * Minimal heuristics: we always attempt hardware unless simulation_mode already True.
+  * Resolution precedence: env override -> hardware -> fallback (800x480).
+  * Orientation handled via `orientation_info`.
+  * Clear diagnostics via optional env flags: INKY_DEBUG, DEBUG_INKY_RESOLUTION.
+"""
+
+from __future__ import annotations
+
 import importlib.util
+import logging
+import os
 import traceback
+
 from PIL import Image  # type: ignore
 from dotenv import load_dotenv  # type: ignore
 from mimir_display.utils.orientation import orientation_info
-
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+
+# ---------------------------------------------------------------------------
+# Development / simulation mode detection
+# ---------------------------------------------------------------------------
 def is_dev_mode() -> bool:
-        """Return True only if ENVIRONMENT explicitly requests development.
+    """Return True iff ENVIRONMENT explicitly requests development."""
+    return (os.getenv("ENVIRONMENT") or "").strip().lower() in {"development", "dev"}
 
-        New simplified contract (refactored):
-            * Only the ENVIRONMENT variable controls initial development/simulation mode.
-            * Accepted development indicators: 'development', 'dev'.
-            * Other legacy toggles (DEV_MODE, NO_HARDWARE) are ignored to reduce
-                accidental simulation and confusion.
-        """
-        env = (os.getenv('ENVIRONMENT') or '').strip().lower()
-        return env in ('development', 'dev')
 
-use_fake = is_dev_mode()
-
-# Explicit override: FORCE_INKY_HARDWARE disables simulation even in dev.
+simulation_mode = is_dev_mode()
 if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
-    use_fake = False
+    simulation_mode = False
 
-inky = None
-_inky_init_error = None
+# State managed lazily
+inky = None  # actual Inky instance or None
+_inky_init_error: Exception | None = None
 _inky_initialized = False
-_last_resolution_source: str | None = None  # diagnostic: 'override' | 'hardware' | 'fallback'
-
-def _want_inky_backend() -> bool:
-    """Determine if the inky backend is actually requested.
-
-    We only attempt hardware initialization (and therefore only emit warnings)
-    if the process explicitly selected or autodetected the inky backend.
-    Signals (checked in order):
-      1. BACKEND env var equals 'inky' (case-insensitive)
-      2. FORCE_INKY_HARDWARE explicitly set
-      3. No other backend forced AND no framebuffer hardware present (heuristic)
-    """
-    backend_env = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
-    if backend_env == "inky":
-        return True
-    if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
-        return True
-    # Heuristic: if a framebuffer path exists and is writable, likely not inky; don't auto-init.
-    fb_path = os.getenv("FRAMEBUFFER", "/dev/fb0")
-    if os.path.exists(fb_path) and os.access(fb_path, os.W_OK):
-        # Allow explicit CLI override
-        if "--backend" in sys.argv:
-            try:
-                idx = sys.argv.index("--backend")
-                if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "inky":
-                    return True
-            except ValueError:
-                pass
-        return False
-    # In refactored model: if we're in development mode we don't auto-init hardware
-    # unless FORCE_INKY_HARDWARE was set (which already flipped use_fake False above).
-    return not is_dev_mode()
+_last_resolution_source: str | None = None  # 'override' | 'hardware' | 'fallback'
 
 
-def _init_inky_if_needed():
-    global inky, _inky_init_error, _inky_initialized, use_fake
+# ---------------------------------------------------------------------------
+# Hardware init
+# ---------------------------------------------------------------------------
+def _should_attempt_hardware() -> bool:
+    return not simulation_mode
+
+
+def _init_inky_if_needed() -> None:
+    global inky, _inky_init_error, _inky_initialized, simulation_mode
     if _inky_initialized:
         return
     _inky_initialized = True
-    if use_fake:
-        return  # Respect dev/simulation choice without hardware attempt.
-    if not _want_inky_backend():
-        # Backend not selected; remain silent and in lazy state.
+    if not _should_attempt_hardware():
         return
-    # Optional: ignore pin busy checks if user opts in (e.g. SPI controller legitimately owns CS0)
     ignore_pin_busy = os.getenv("INKY_IGNORE_PIN_BUSY", "").lower() in ("1", "true", "yes")
     patched_pin_check = False
     if ignore_pin_busy:
-        try:  # Lazy/defensive – only patch if gpiodevice available
+        try:  # optional patching of gpiodevice pin check
             import gpiodevice  # type: ignore
             if hasattr(gpiodevice, "check_pins_available"):
-                _orig_check = gpiodevice.check_pins_available  # type: ignore
                 def _noop_check(*_a, **_k):
-                    return False  # "pins not busy" signal
+                    return False
                 gpiodevice.check_pins_available = _noop_check  # type: ignore
                 patched_pin_check = True
-        except Exception:
+        except Exception:  # pragma: no cover - best effort
             pass
     try:
         from inky.auto import auto  # type: ignore
-        inky = auto(ask_user=False, verbose=False)  # Don't ask user in non-interactive mode
-    except ImportError as ie:
+        inky = auto(ask_user=False, verbose=False)
+    except ImportError as ie:  # missing package / dependency
         _inky_init_error = ie
-        # Only warn if user explicitly asked for inky.
-        backend_env_local = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
-        if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
-            print("Warning: inky package not installed or failed to import, running in fake mode")
-        use_fake = True
-    except Exception as e:
+        simulation_mode = True
+        if os.getenv("INKY_DEBUG"):
+            logger.warning("[INKY] ImportError -> simulation: %s", ie)
+    except Exception as e:  # general init failure
         _inky_init_error = e
-        backend_env_local = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
-        # Second-chance retry: if failure looks like pin contention and we have not yet patched, attempt patch+retry
+        # Retry once if pin contention is suspected and user allowed patching but it wasn't applied yet
         msg = str(e).lower()
         retry_done = False
         if ("pin" in msg or "busy" in msg or "in use" in msg) and ignore_pin_busy and not patched_pin_check:
-            try:
+            try:  # attempt late patch + retry
                 import gpiodevice  # type: ignore
                 if hasattr(gpiodevice, "check_pins_available"):
                     def _noop_check(*_a, **_k):
@@ -119,154 +94,148 @@ def _init_inky_if_needed():
                     from inky.auto import auto  # type: ignore
                     inky = auto(ask_user=False, verbose=False)
                     retry_done = True
-            except Exception:
+            except Exception:  # pragma: no cover
                 pass
         if not retry_done:
-            if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
-                print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
-            use_fake = True
+            simulation_mode = True
+            if os.getenv("INKY_DEBUG"):
+                logger.warning("[INKY] Init failure -> simulation: %s", e)
 
-if use_fake and os.getenv("DEBUG_INKY_IMPORT", "").lower() in ("1", "true", "yes"):
-    print("[INKY DEBUG] use_fake=True (development mode or prior init failure). Environment:")
+
+if simulation_mode and os.getenv("INKY_DEBUG", "").lower() in ("1", "true", "yes"):
+    print("[INKY DEBUG] simulation_mode=True (dev or init failure)")
     print(f"  ENVIRONMENT={os.getenv('ENVIRONMENT')}")
     spec = importlib.util.find_spec("inky")
     print(f"  inky module spec: {spec}")
     if _inky_init_error:
-        print("  Inky init error type:", type(_inky_init_error).__name__)
-        print("  Inky init error:", _inky_init_error)
+        print("  init_error_type=", type(_inky_init_error).__name__)
+        print("  init_error=", _inky_init_error)
         traceback.print_exception(type(_inky_init_error), _inky_init_error, _inky_init_error.__traceback__)
 
-def _parse_resolution_override() -> list[int] | None:
-    """Parse resolution override from env.
 
-    Supports DISPLAY_NATIVE_RESOLUTION or DISPLAY_RESOLUTION in form WIDTHxHEIGHT (case-insensitive).
-    Returns list [w, h] or None if not set/invalid.
-    """
-    raw = os.getenv("DISPLAY_NATIVE_RESOLUTION") or os.getenv("DISPLAY_RESOLUTION")
+# ---------------------------------------------------------------------------
+# Resolution helpers
+# ---------------------------------------------------------------------------
+def _parse_resolution_override() -> tuple[int, int] | None:
+    raw = (os.getenv("DISPLAY_NATIVE_RESOLUTION") or os.getenv("DISPLAY_RESOLUTION") or "").strip()
     if not raw:
         return None
     raw = raw.lower().replace(" ", "")
     if "x" not in raw:
         return None
     try:
-        w_str, h_str = raw.split("x", 1)
-        w, h = int(w_str), int(h_str)
+        w_s, h_s = raw.split("x", 1)
+        w, h = int(w_s), int(h_s)
         if w > 0 and h > 0:
-            return [w, h]
-    except Exception:
+            return (w, h)
+    except Exception:  # pragma: no cover - invalid user input
         return None
     return None
 
 
-def get_inky_resolution():
-    """Public resolution accessor (kept for backward compatibility).
-
-    Returns:
-        (width, height) tuple in native landscape ordering.
-    """
-    w, h, _src = _get_inky_resolution_with_source()
-    return (w, h)
-
-
-def _get_inky_resolution_with_source():
-    """Internal helper returning (w, h, source).
-
-    Source is one of: override | hardware | fallback.
-    Updates _last_resolution_source for diagnostic reporting.
-    """
+def _get_inky_resolution_with_source() -> tuple[int, int, str]:
     global _last_resolution_source
     # 1) Override
     override = _parse_resolution_override()
     if override:
-        _last_resolution_source = 'override'
+        _last_resolution_source = "override"
         if os.getenv("DEBUG_INKY_RESOLUTION"):
-            logger.info("[RESOLUTION] Using override from env: %s", override)
-        return int(override[0]), int(override[1]), _last_resolution_source
-
+            logger.info("[RESOLUTION] override=%s", override)
+        return override[0], override[1], _last_resolution_source
     # 2) Hardware
     _init_inky_if_needed()
-    if not use_fake and inky is not None:
+    if not simulation_mode and inky is not None:
         try:
             res = getattr(inky, "resolution", None)
             if isinstance(res, (list, tuple)) and len(res) == 2:
                 w, h = int(res[0]), int(res[1])
                 if w > 0 and h > 0:
-                    _last_resolution_source = 'hardware'
-                    if os.getenv("DEBUG_INKY_RESOLUTION"):
-                        logger.info("[RESOLUTION] Using hardware detected resolution: (%d, %d)", w, h)
+                    _last_resolution_source = "hardware"
                     return w, h, _last_resolution_source
-            maybe_w = getattr(inky, "width", None)
-            maybe_h = getattr(inky, "height", None)
-            if isinstance(maybe_w, int) and isinstance(maybe_h, int) and maybe_w > 0 and maybe_h > 0:
-                _last_resolution_source = 'hardware'
-                if os.getenv("DEBUG_INKY_RESOLUTION"):
-                    logger.info("[RESOLUTION] Using hardware width/height attributes: (%d, %d)", maybe_w, maybe_h)
-                return maybe_w, maybe_h, _last_resolution_source
-        except Exception as e:
+            w_attr = getattr(inky, "width", None)
+            h_attr = getattr(inky, "height", None)
+            if isinstance(w_attr, int) and isinstance(h_attr, int) and w_attr > 0 and h_attr > 0:
+                _last_resolution_source = "hardware"
+                return w_attr, h_attr, _last_resolution_source
+        except Exception as e:  # pragma: no cover - defensive
             if os.getenv("DEBUG_INKY_RESOLUTION"):
-                logger.warning("[RESOLUTION] Hardware resolution detection failed: %s", e)
-
+                logger.warning("[RESOLUTION] hardware detection failed: %s", e)
     # 3) Fallback
-    _last_resolution_source = 'fallback'
-    if os.getenv("DEBUG_INKY_RESOLUTION"):
-        logger.info("[RESOLUTION] Falling back to default resolution: (800, 480)")
+    _last_resolution_source = "fallback"
     return 800, 480, _last_resolution_source
 
-def get_inky_colour_variant():
+
+def get_inky_resolution() -> tuple[int, int]:  # public compatibility wrapper
+    w, h, _ = _get_inky_resolution_with_source()
+    return w, h
+
+
+def get_inky_colour_variant() -> str:
     _init_inky_if_needed()
-    if use_fake or inky is None:
+    if simulation_mode or inky is None:
         return os.getenv("FAKE_INKY_COLOR", "simulated")
     return getattr(inky, "colour", getattr(inky, "color", "unknown"))
 
-def show_on_inky(imagepath):
-    global use_fake  # ensure declared before any assignment in exception paths
+
+def show_on_inky(image_path: str) -> None:
+    global simulation_mode
     _init_inky_if_needed()
-    if use_fake or inky is None:
-        logger.info("[DEV] Would display: %s", imagepath)
+    if simulation_mode or inky is None:
+        logger.info("[DEV] Would display: %s", image_path)
         return
-
-    logger.info("Updating image: %s", imagepath)
-
-    img = Image.open(imagepath)
+    logger.info("Updating image: %s", image_path)
+    img = Image.open(image_path)
     inky.set_image(img)
-    inky.set_border(inky.BLACK)
-
-    logger.info("Inky refresh started (~20–35s) …")
+    try:
+        inky.set_border(inky.BLACK)  # some variants
+    except Exception:  # pragma: no cover - not all support border
+        pass
+    logger.info("Inky refresh started …")
     try:
         inky.show()
         logger.info("Inky refresh complete")
-    except SystemExit as se:  # Pin contention or gpiodevice fatal check
-        logger.error("[INKY] Hardware update aborted (pin contention or setup error): %s", se)
-        # Switch to simulation for subsequent calls instead of killing service
-        use_fake = True
-    except Exception as e:  # General failure path
-        logger.error("[INKY] Unexpected exception during refresh: %s", e)
+    except SystemExit as se:  # pin contention or low-level abort
+        logger.error("[INKY] SystemExit during refresh: %s -- switching to simulation", se)
+        simulation_mode = True
+    except Exception as e:
+        logger.error("[INKY] Unexpected refresh exception: %s", e)
+        simulation_mode = True
 
 
-# ---- Backend interface for dynamic loader ----
+# ---------------------------------------------------------------------------
+# Backend interface
+# ---------------------------------------------------------------------------
 def get_display_capabilities() -> dict:
-    w, h, rsrc = _get_inky_resolution_with_source()
+    w, h, src = _get_inky_resolution_with_source()
     oinfo = orientation_info(w, h)
-    colour = get_inky_colour_variant()
     return {
         "resolution": [oinfo.logical_width, oinfo.logical_height],
         "native_resolution": [w, h],
-        "resolution_source": rsrc,
+        "resolution_source": src,
         "orientation": oinfo.name,
         "rotation_deg": oinfo.rotation_deg,
         "supported_formats": ["jpg", "jpeg", "png"],
         "redis_distribution": True,
         "content_claiming": True,
-        "simulation_mode": bool(use_fake or inky is None),
+        "simulation_mode": bool(simulation_mode or inky is None),
         "backend": "inky",
-        "color_variant": colour,
+        "color_variant": get_inky_colour_variant(),
         "init_error": type(_inky_init_error).__name__ if _inky_init_error else None,
     }
 
 
-def display_image(image_path: str) -> None:  # adapter
+def display_image(image_path: str) -> None:
     show_on_inky(image_path)
 
 
 def is_development_mode() -> bool:
-    return use_fake or is_dev_mode()
+    return simulation_mode
+
+
+__all__ = [
+    "get_display_capabilities",
+    "display_image",
+    "is_development_mode",
+    "get_inky_resolution",
+    "show_on_inky",
+]
