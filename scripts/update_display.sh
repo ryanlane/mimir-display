@@ -78,8 +78,33 @@ fi
 
 if [[ $NEED_SYNC == 1 ]]; then
   info "Synchronizing source -> install (rsync)"
-  RSYNC_EXCLUDES=(--exclude .venv --exclude .git --exclude __pycache__) 
+  # --- Environment file preservation ---------------------------------------
+  # We NEVER want to lose a deployment's live .env by virtue of --delete.
+  # Default: preserve existing .env (exclude from rsync) and create timestamped backups.
+  # Set ALLOW_ENV_OVERWRITE=1 to let rsync replace it (still backed up first).
+  PRESERVE_ENV=${PRESERVE_ENV:-1}
+  ALLOW_ENV_OVERWRITE=${ALLOW_ENV_OVERWRITE:-0}
+  ENV_PATH="$INSTALL_DIR/.env"
+  if [[ -f $ENV_PATH ]]; then
+    ts=$(date +%Y%m%d-%H%M%S)
+    cp "$ENV_PATH" "$INSTALL_DIR/.env.backup-$ts"
+    info "Backed up existing .env -> .env.backup-$ts"
+  fi
+  RSYNC_EXCLUDES=(--exclude .venv --exclude .git --exclude __pycache__)
+  if [[ $ALLOW_ENV_OVERWRITE != 1 ]]; then
+    RSYNC_EXCLUDES+=(--exclude .env)
+  fi
   rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/" "$INSTALL_DIR/"
+  # If overwrite allowed and repo lacks .env, restore from backup to avoid accidental purge.
+  if [[ $ALLOW_ENV_OVERWRITE == 1 && ! -f $ENV_PATH ]]; then
+    latest_backup=$(ls -1t "$INSTALL_DIR"/.env.backup-* 2>/dev/null | head -n1 || true)
+    if [[ -n $latest_backup ]]; then
+      cp "$latest_backup" "$ENV_PATH"
+      warn ".env missing in repo; restored from $latest_backup"
+    else
+      warn ".env missing after sync and no backup found; create one manually."
+    fi
+  fi
 else
   info "Editable install detected (same directory); skipping rsync"
 fi

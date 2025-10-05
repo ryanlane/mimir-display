@@ -188,8 +188,16 @@ def show_on_inky(imagepath):
     inky.set_border(inky.BLACK)
 
     logger.info("Inky refresh started (~20–35s) …")
-    inky.show()
-    logger.info("Inky refresh complete")
+    try:
+        inky.show()
+        logger.info("Inky refresh complete")
+    except SystemExit as se:  # Pin contention or gpiodevice fatal check
+        global use_fake
+        logger.error("[INKY] Hardware update aborted (pin contention or setup error): %s", se)
+        # Switch to simulation for subsequent calls instead of killing service
+        use_fake = True
+    except Exception as e:  # General failure path
+        logger.error("[INKY] Unexpected exception during refresh: %s", e)
 
 
 # ---- Backend interface for dynamic loader ----
