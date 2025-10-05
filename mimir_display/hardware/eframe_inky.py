@@ -1,11 +1,13 @@
 # hardware/eframe_inky.py
 
-from PIL import Image
 import os
+import sys
 import logging
 import importlib.util
 import traceback
-from dotenv import load_dotenv
+from PIL import Image  # type: ignore
+from dotenv import load_dotenv  # type: ignore
+from mimir_display.utils.orientation import orientation_info
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +42,7 @@ def _want_inky_backend() -> bool:
       2. FORCE_INKY_HARDWARE explicitly set
       3. No other backend forced AND no framebuffer hardware present (heuristic)
     """
-    backend_env = os.getenv("BACKEND", "").strip().lower()
+    backend_env = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
     if backend_env == "inky":
         return True
     if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
@@ -48,6 +50,14 @@ def _want_inky_backend() -> bool:
     # Heuristic: if a framebuffer path exists and is writable, likely not inky; don't auto-init.
     fb_path = os.getenv("FRAMEBUFFER", "/dev/fb0")
     if os.path.exists(fb_path) and os.access(fb_path, os.W_OK):
+        # Allow explicit CLI override
+        if "--backend" in sys.argv:
+            try:
+                idx = sys.argv.index("--backend")
+                if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "inky":
+                    return True
+            except ValueError:
+                pass
         return False
     # Otherwise defer to environment development indicators; only try if not explicitly dev fake.
     return not is_dev_mode()
@@ -69,12 +79,14 @@ def _init_inky_if_needed():
     except ImportError as ie:
         _inky_init_error = ie
         # Only warn if user explicitly asked for inky.
-        if os.getenv("BACKEND", "").lower() == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+        backend_env_local = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
+        if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
             print("Warning: inky package not installed or failed to import, running in fake mode")
         use_fake = True
     except Exception as e:
         _inky_init_error = e
-        if os.getenv("BACKEND", "").lower() == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
+        backend_env_local = (os.getenv("BACKEND") or os.getenv("DISPLAY_BACKEND") or "").strip().lower()
+        if backend_env_local == "inky" or os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
             print(f"Warning: Could not initialize inky hardware: {e}, running in fake mode")
         use_fake = True
 
@@ -178,3 +190,31 @@ def show_on_inky(imagepath):
     logger.info("Inky refresh started (~20–35s) …")
     inky.show()
     logger.info("Inky refresh complete")
+
+
+# ---- Backend interface for dynamic loader ----
+def get_display_capabilities() -> dict:
+    w, h = get_inky_resolution()
+    oinfo = orientation_info(w, h)
+    colour = get_inky_colour_variant()
+    return {
+        "resolution": [oinfo.logical_width, oinfo.logical_height],
+        "native_resolution": [w, h],
+        "orientation": oinfo.name,
+        "rotation_deg": oinfo.rotation_deg,
+        "supported_formats": ["jpg", "jpeg", "png"],
+        "redis_distribution": True,
+        "content_claiming": True,
+        "simulation_mode": bool(use_fake or inky is None),
+        "backend": "inky",
+        "color_variant": colour,
+        "init_error": type(_inky_init_error).__name__ if _inky_init_error else None,
+    }
+
+
+def display_image(image_path: str) -> None:  # adapter
+    show_on_inky(image_path)
+
+
+def is_development_mode() -> bool:
+    return use_fake or is_dev_mode()
