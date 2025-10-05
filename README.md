@@ -138,9 +138,11 @@ Prerequisites (follow first):
 2. Follow the official setup guide: https://learn.adafruit.com/adafruit-rgb-matrix-bonnet-for-raspberry-pi/matrix-setup
 3. Build & install the library (ensures `rgbmatrix` Python module importable).
 
-Install extras:
+Install library (external build/install first). The `rgbmatrix` extra here is a no-op placeholder so the installer can use a uniform pattern; you still must build the hzeller library yourself.
 ```
-pip install .[rgbmatrix]
+# Build & install hzeller/rpi-rgb-led-matrix per upstream docs
+# (produces the rgbmatrix Python module)
+pip install .[rgbmatrix]   # does not fetch additional packages; safe if already built
 ```
 
 Run with explicit backend:

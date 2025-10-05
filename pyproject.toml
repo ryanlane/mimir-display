@@ -45,9 +45,8 @@ hyperpixelsq = [
     # No extra runtime deps (framebuffer handled by kernel overlay)
 ]
 rgbmatrix = [
-    # Python bindings provided by hzeller/rpi-rgb-led-matrix build (may require manual install)
-    # Package import name is 'rgbmatrix'; leave version unpinned due to source build nature.
-    "rgbmatrix",
+    # Intentionally empty: hzeller/rpi-rgb-led-matrix is built/installed externally.
+    # Presence of this extra enables uniform installer syntax (."[rgbmatrix]") without pip fetching anything.
 ]
 all = [
     # Convenience meta-extra; user installs all hardware support + dev tooling
@@ -55,7 +54,6 @@ all = [
     "numpy<2.0.0",
     "RPi.GPIO>=0.7.1",
     "spidev>=3.5",
-    "rgbmatrix",
 ]
 dev = [
     "pytest>=7.0.0",
