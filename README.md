@@ -5,6 +5,7 @@ Unified display client for Raspberry Pi supporting multiple hardware backends (I
 ## Features
 * Dynamic backend selection (`--backend` or `DISPLAY_BACKEND=auto`)
 * Inky and HyperPixel RGB565 framebuffer support (multi-bpp, stride + RGB565 endianness/channel overrides)
+* RGB LED Matrix (hzeller/rpi-rgb-led-matrix) backend for HUB75 panels (via `rgbmatrix` bindings)
 * Orientation handling via `DISPLAY_ORIENTATION` (landscape / portrait_left / portrait_right)
 * Startup logo image (centered) + optional HyperPixel test pattern (`STARTUP_TEST_PATTERN=1`)
 * Simulation fallback when hardware missing
@@ -45,7 +46,7 @@ mimir-display --backend auto
 ## Environment Variables (.env)
 | Key | Description | Example |
 |-----|-------------|---------|
-| DISPLAY_BACKEND | Backend selection (`auto`, `inky`, `hyperpixelsq`) | `DISPLAY_BACKEND=auto` |
+| DISPLAY_BACKEND | Backend selection (`auto`, `inky`, `hyperpixelsq`, `rgbmatrix`) | `DISPLAY_BACKEND=auto` |
 | DISPLAY_ORIENTATION | Physical mounting: `landscape`, `portrait_left`, `portrait_right` | `DISPLAY_ORIENTATION=portrait_left` |
 | STARTUP_LOGO_PATH | Override path to startup image (defaults to built-in `startup.png`) | `/opt/mimir-display/logo.png` |
 | STARTUP_TEST_PATTERN | If `1` and HyperPixel backend, render diagnostic gradient before logo | `STARTUP_TEST_PATTERN=1` |
@@ -58,6 +59,14 @@ mimir-display --backend auto
 | HYPERPIXEL_FORCE_BPP | Force treat framebuffer as 16/24/32 bpp | `HYPERPIXEL_FORCE_BPP=16` |
 | HYPERPIXEL_8888_SEQ | 4-byte sequence for 32bpp layout (chars in `RGBAX`) | `HYPERPIXEL_8888_SEQ=BGRX` |
 | HYPERPIXEL_LOG_FIRST_BYTES | Log first N bytes of first framebuffer write | `HYPERPIXEL_LOG_FIRST_BYTES=64` |
+| RGBMATRIX_ROWS | Panel rows (e.g. 32, 64) | `RGBMATRIX_ROWS=64` |
+| RGBMATRIX_CHAIN_LENGTH | Daisy chained panels | `RGBMATRIX_CHAIN_LENGTH=2` |
+| RGBMATRIX_PARALLEL | Parallel chains (advanced) | `RGBMATRIX_PARALLEL=1` |
+| RGBMATRIX_HARDWARE_MAPPING | Hardware mapping string ("regular", "adafruit-hat", etc.) | `RGBMATRIX_HARDWARE_MAPPING=adafruit-hat` |
+| RGBMATRIX_GPIO_SLOWDOWN | Timing slowdown (0-4) | `RGBMATRIX_GPIO_SLOWDOWN=2` |
+| RGBMATRIX_PWM_BITS | PWM bit depth | `RGBMATRIX_PWM_BITS=11` |
+| RGBMATRIX_BRIGHTNESS | Brightness 1-100 | `RGBMATRIX_BRIGHTNESS=60` |
+| RGBMATRIX_LIMIT_FPS | Software limit refresh rate | `RGBMATRIX_LIMIT_FPS=30` |
 | MIMIR_STATE_DIR / MIMIR_CACHE_DIR | Custom state + cache paths | `/var/lib/mimir-display/state` |
 | WEBHOOK_ENABLED / WEBHOOK_PORT | Enable webhook server & port | `WEBHOOK_ENABLED=true` |
 | STARTUP_LOGO_PATH | Custom logo path (repeated for emphasis) | `/opt/logo.png` |
@@ -100,6 +109,9 @@ sudo systemctl enable --now mimir-display
 	* Else fallback to Inky
 4. Simulation fallback (when backend import fails or forced)
 
+`rgbmatrix` is not auto-detected (requires explicit `--backend rgbmatrix` or `DISPLAY_BACKEND=rgbmatrix`). This avoids
+mis-identification on systems that also have a framebuffer.
+
 Environment shortcuts:
 * `FORCE_INKY=1` to bypass framebuffer detection
 * `FORCE_SIM=1` to force simulation (primarily for development/testing)
@@ -116,6 +128,42 @@ The HyperPixel Square does not need a Python driver here; it appears as a Linux 
 3. Run the installer and select `hyperpixelsq` (or choose `auto` and let autodetection pick it).
 
 The installer script will offer to append the overlay line automatically if it is missing. After adding the overlay you must reboot before the framebuffer becomes available.
+
+## RGB LED Matrix (HUB75) Setup
+
+This backend uses the `hzeller/rpi-rgb-led-matrix` library (Python bindings) to drive HUB75 RGB LED panels via GPIO.
+
+Prerequisites (follow first):
+1. Adafruit Bonnet / HAT wiring and soldering complete (if using the Adafruit RGB Matrix Bonnet).
+2. Follow the official setup guide: https://learn.adafruit.com/adafruit-rgb-matrix-bonnet-for-raspberry-pi/matrix-setup
+3. Build & install the library (ensures `rgbmatrix` Python module importable).
+
+Install extras:
+```
+pip install .[rgbmatrix]
+```
+
+Run with explicit backend:
+```
+mimir-display --backend rgbmatrix
+```
+
+Or via environment:
+```
+echo 'DISPLAY_BACKEND=rgbmatrix' >> .env
+```
+
+Environment tuning (common):
+```
+RGBMATRIX_ROWS=64
+RGBMATRIX_CHAIN_LENGTH=2
+RGBMATRIX_HARDWARE_MAPPING=adafruit-hat
+RGBMATRIX_BRIGHTNESS=70
+```
+
+Orientation: uses the same `DISPLAY_ORIENTATION` (landscape / portrait_left / portrait_right).
+
+If the `rgbmatrix` module is missing or initialization fails, the client will fall back to simulation mode and log a warning.
 
 ### Optional: Suppress Console Cursor / Reduce Boot Noise
 
@@ -163,6 +211,56 @@ Troubleshooting:
 * Run `cat /sys/class/graphics/fb0/virtual_size` → expect `720,720`.
 * Run `cat /sys/class/graphics/fb0/bits_per_pixel` → expect `16`.
 * If these differ, verify the overlay line and reboot again.
+
+## Inky E‑Ink SPI Chip Select Contention (dtoverlay=spi0-0cs)
+
+Some Raspberry Pi images (especially newer Bookworm variants or systems that previously enabled additional SPI peripherals) can leave the second chip select (CS1) on the primary SPI bus in a conflicting state. In practice this can surface when initializing an Inky e‑ink display as errors such as:
+
+```
+RuntimeError: Failed to initialise Inky: device busy / pin already in use
+```
+
+or low‑level messages about GPIO pin reservation / chip select failure. Applying the following simple Device Tree overlay constrains the SPI0 controller to a single chip select (CS0) and resolved the contention for us:
+
+```
+dtoverlay=spi0-0cs
+```
+
+### When to Apply
+Apply this if:
+* The Inky backend keeps failing to initialize while SPI is otherwise enabled.
+* You previously had another SPI device on CS1.
+* You see intermittent success only after cold boots.
+
+### Steps
+1. Determine which boot config path your image uses (Bookworm usually `/boot/firmware/config.txt`; older images `/boot/config.txt`).
+2. Backup the file:
+	```bash
+	sudo cp /boot/firmware/config.txt /boot/firmware/config.txt.bak.$(date +%Y%m%d-%H%M%S) || \
+	sudo cp /boot/config.txt /boot/config.txt.bak.$(date +%Y%m%d-%H%M%S)
+	```
+3. Edit the active file and add (or ensure) a single line containing:
+	```
+	dtoverlay=spi0-0cs
+	```
+	Place it near other dtoverlay entries; avoid duplicates.
+4. Reboot:
+	```bash
+	sudo reboot
+	```
+
+### Verification
+After reboot run:
+```bash
+ls -l /dev/spidev0.*
+dmesg | grep -i spi | head -n 20
+```
+You should see `/dev/spidev0.0` present and no errors about CS lines. The Inky initialization should now proceed without falling back to simulation.
+
+### Reverting
+If the change causes unexpected behavior for another SPI peripheral, remove the `dtoverlay=spi0-0cs` line (or comment it out with a leading `#`), restore your backup, and reboot.
+
+> Rationale: Some helper scripts or prior overlays allocate both CS lines or leave CS1 asserted, which can confuse simple display drivers that expect uncontended access on CS0. Limiting to one chip select eliminates that edge case for single‑device setups like an Inky e‑ink panel.
 
 ## Orientation Handling
 Physical rotation is declared via `DISPLAY_ORIENTATION`. Portrait modes swap the logical reported resolution and apply an internal rotation so content is rendered upright while the hardware still receives native landscape-ordered buffers.

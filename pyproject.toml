@@ -44,12 +44,18 @@ inky = [
 hyperpixelsq = [
     # No extra runtime deps (framebuffer handled by kernel overlay)
 ]
+rgbmatrix = [
+    # Python bindings provided by hzeller/rpi-rgb-led-matrix build (may require manual install)
+    # Package import name is 'rgbmatrix'; leave version unpinned due to source build nature.
+    "rgbmatrix",
+]
 all = [
     # Convenience meta-extra; user installs all hardware support + dev tooling
     "inky",
     "numpy<2.0.0",
     "RPi.GPIO>=0.7.1",
     "spidev>=3.5",
+    "rgbmatrix",
 ]
 dev = [
     "pytest>=7.0.0",

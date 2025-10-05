@@ -23,6 +23,7 @@ _KNOWN_MODULES = {
     "hyperpixelsq": "mimir_display.hardware.hyperpixelsq",
     "inky": "mimir_display.hardware.eframe_inky",
     "simulation": "mimir_display.hardware.simulation",
+    "rgbmatrix": "mimir_display.hardware.rgbmatrix_led",
 }
 
 
