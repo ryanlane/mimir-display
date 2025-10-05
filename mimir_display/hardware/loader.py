@@ -8,8 +8,8 @@ Resolution order:
 """
 from __future__ import annotations
 
-import os
 import importlib
+import os
 from typing import Any, Protocol
 
 
@@ -53,14 +53,14 @@ def autodetect_backend() -> str:
         virt_size_path = "/sys/class/graphics/fb0/virtual_size"
         bpp_path = "/sys/class/graphics/fb0/bits_per_pixel"
         try:
-            with open(virt_size_path, "r", encoding="utf-8") as f:
+            with open(virt_size_path, encoding="utf-8") as f:
                 size_txt = f.read().strip()
             w_h = size_txt.split(",")
             if len(w_h) == 2:
                 w, h = (int(w_h[0]), int(w_h[1]))
                 bpp = 0
                 try:
-                    with open(bpp_path, "r", encoding="utf-8") as f2:
+                    with open(bpp_path, encoding="utf-8") as f2:
                         bpp = int(f2.read().strip())
                 except Exception:
                     pass  # non-fatal
@@ -79,6 +79,10 @@ def load_backend(explicit: str | None = None):
         name = None
     if not name:
         name = autodetect_backend()
+    else:
+        # Record explicit request so backend heuristics (_want_inky_backend) can see it
+        # without forcing users to set multiple different env vars.
+        os.environ.setdefault("BACKEND", name)
     try:
         mod = _import_backend(name)
     except Exception as e:  # pragma: no cover - defensive

@@ -14,23 +14,28 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-def is_dev_mode():
-    """Check if application is running in development mode based on environment variable"""
-    env = os.getenv('ENVIRONMENT', '').lower()
-    # Also check for common development indicators
-    dev_indicators = os.getenv('DEV_MODE', '').lower() in ('true', '1', 'yes')
-    no_hardware = os.getenv('NO_HARDWARE', '').lower() in ('true', '1', 'yes')
-    return env in ('development', 'dev') or dev_indicators or no_hardware
+def is_dev_mode() -> bool:
+        """Return True only if ENVIRONMENT explicitly requests development.
+
+        New simplified contract (refactored):
+            * Only the ENVIRONMENT variable controls initial development/simulation mode.
+            * Accepted development indicators: 'development', 'dev'.
+            * Other legacy toggles (DEV_MODE, NO_HARDWARE) are ignored to reduce
+                accidental simulation and confusion.
+        """
+        env = (os.getenv('ENVIRONMENT') or '').strip().lower()
+        return env in ('development', 'dev')
 
 use_fake = is_dev_mode()
 
-# Allow explicit override to force hardware attempt even if dev indicators set
-if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):  # manual override
+# Explicit override: FORCE_INKY_HARDWARE disables simulation even in dev.
+if os.getenv("FORCE_INKY_HARDWARE", "").lower() in ("1", "true", "yes"):
     use_fake = False
 
 inky = None
 _inky_init_error = None
 _inky_initialized = False
+_last_resolution_source: str | None = None  # diagnostic: 'override' | 'hardware' | 'fallback'
 
 def _want_inky_backend() -> bool:
     """Determine if the inky backend is actually requested.
@@ -59,7 +64,8 @@ def _want_inky_backend() -> bool:
             except ValueError:
                 pass
         return False
-    # Otherwise defer to environment development indicators; only try if not explicitly dev fake.
+    # In refactored model: if we're in development mode we don't auto-init hardware
+    # unless FORCE_INKY_HARDWARE was set (which already flipped use_fake False above).
     return not is_dev_mode()
 
 
@@ -69,7 +75,7 @@ def _init_inky_if_needed():
         return
     _inky_initialized = True
     if use_fake:
-        return  # Respect explicit dev/fake choice without logging noise.
+        return  # Respect dev/simulation choice without hardware attempt.
     if not _want_inky_backend():
         # Backend not selected; remain silent and in lazy state.
         return
@@ -121,10 +127,8 @@ def _init_inky_if_needed():
             use_fake = True
 
 if use_fake and os.getenv("DEBUG_INKY_IMPORT", "").lower() in ("1", "true", "yes"):
-    print("[INKY DEBUG] use_fake=True. Environment details:")
+    print("[INKY DEBUG] use_fake=True (development mode or prior init failure). Environment:")
     print(f"  ENVIRONMENT={os.getenv('ENVIRONMENT')}")
-    print(f"  DEV_MODE={os.getenv('DEV_MODE')}")
-    print(f"  NO_HARDWARE={os.getenv('NO_HARDWARE')}")
     spec = importlib.util.find_spec("inky")
     print(f"  inky module spec: {spec}")
     if _inky_init_error:
@@ -155,22 +159,29 @@ def _parse_resolution_override() -> list[int] | None:
 
 
 def get_inky_resolution():
-    """Determine panel resolution.
-
-    Priority:
-      1. Explicit environment override (DISPLAY_NATIVE_RESOLUTION / DISPLAY_RESOLUTION)
-      2. Hardware provided inky.resolution tuple (preferred authoritative source)
-      3. Fallback default (800x480)
+    """Public resolution accessor (kept for backward compatibility).
 
     Returns:
-        (width, height) as a tuple of ints in native landscape order.
+        (width, height) tuple in native landscape ordering.
     """
+    w, h, _src = _get_inky_resolution_with_source()
+    return (w, h)
+
+
+def _get_inky_resolution_with_source():
+    """Internal helper returning (w, h, source).
+
+    Source is one of: override | hardware | fallback.
+    Updates _last_resolution_source for diagnostic reporting.
+    """
+    global _last_resolution_source
     # 1) Override
     override = _parse_resolution_override()
     if override:
+        _last_resolution_source = 'override'
         if os.getenv("DEBUG_INKY_RESOLUTION"):
             logger.info("[RESOLUTION] Using override from env: %s", override)
-        return (int(override[0]), int(override[1]))
+        return int(override[0]), int(override[1]), _last_resolution_source
 
     # 2) Hardware
     _init_inky_if_needed()
@@ -180,24 +191,26 @@ def get_inky_resolution():
             if isinstance(res, (list, tuple)) and len(res) == 2:
                 w, h = int(res[0]), int(res[1])
                 if w > 0 and h > 0:
+                    _last_resolution_source = 'hardware'
                     if os.getenv("DEBUG_INKY_RESOLUTION"):
                         logger.info("[RESOLUTION] Using hardware detected resolution: (%d, %d)", w, h)
-                    return (w, h)
-            # Some versions might expose width/height separately
+                    return w, h, _last_resolution_source
             maybe_w = getattr(inky, "width", None)
             maybe_h = getattr(inky, "height", None)
             if isinstance(maybe_w, int) and isinstance(maybe_h, int) and maybe_w > 0 and maybe_h > 0:
+                _last_resolution_source = 'hardware'
                 if os.getenv("DEBUG_INKY_RESOLUTION"):
                     logger.info("[RESOLUTION] Using hardware width/height attributes: (%d, %d)", maybe_w, maybe_h)
-                return (maybe_w, maybe_h)
+                return maybe_w, maybe_h, _last_resolution_source
         except Exception as e:
             if os.getenv("DEBUG_INKY_RESOLUTION"):
                 logger.warning("[RESOLUTION] Hardware resolution detection failed: %s", e)
 
     # 3) Fallback
+    _last_resolution_source = 'fallback'
     if os.getenv("DEBUG_INKY_RESOLUTION"):
         logger.info("[RESOLUTION] Falling back to default resolution: (800, 480)")
-    return (800, 480)
+    return 800, 480, _last_resolution_source
 
 def get_inky_colour_variant():
     _init_inky_if_needed()
@@ -206,6 +219,7 @@ def get_inky_colour_variant():
     return getattr(inky, "colour", getattr(inky, "color", "unknown"))
 
 def show_on_inky(imagepath):
+    global use_fake  # ensure declared before any assignment in exception paths
     _init_inky_if_needed()
     if use_fake or inky is None:
         logger.info("[DEV] Would display: %s", imagepath)
@@ -222,7 +236,6 @@ def show_on_inky(imagepath):
         inky.show()
         logger.info("Inky refresh complete")
     except SystemExit as se:  # Pin contention or gpiodevice fatal check
-        global use_fake
         logger.error("[INKY] Hardware update aborted (pin contention or setup error): %s", se)
         # Switch to simulation for subsequent calls instead of killing service
         use_fake = True
@@ -232,12 +245,13 @@ def show_on_inky(imagepath):
 
 # ---- Backend interface for dynamic loader ----
 def get_display_capabilities() -> dict:
-    w, h = get_inky_resolution()
+    w, h, rsrc = _get_inky_resolution_with_source()
     oinfo = orientation_info(w, h)
     colour = get_inky_colour_variant()
     return {
         "resolution": [oinfo.logical_width, oinfo.logical_height],
         "native_resolution": [w, h],
+        "resolution_source": rsrc,
         "orientation": oinfo.name,
         "rotation_deg": oinfo.rotation_deg,
         "supported_formats": ["jpg", "jpeg", "png"],
