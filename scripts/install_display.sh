@@ -26,7 +26,7 @@ detect_backend() {
   fi
   # Try probing for rgbmatrix Python binding (best-effort, quiet)
   if command -v python3 >/dev/null 2>&1; then
-    if python3 - <<'PY' 2>/dev/null; then
+    if python3 - <<'PY' 2>/dev/null
 import importlib, os
 mod = importlib.util.find_spec('rgbmatrix')
 raise SystemExit(0 if mod else 1)
