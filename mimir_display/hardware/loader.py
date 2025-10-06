@@ -7,9 +7,10 @@ Resolution order:
 4. Simulation fallback (logs only)
 
 Environment override helpers:
-    FORCE_INKY=1   -> force inky
-    FORCE_HDMI=1   -> force hdmi (generic fb)
-    FORCE_SIM=1    -> force simulation (handled in load)
+    FORCE_INKY=1        -> force inky
+    FORCE_HDMI=1        -> force hdmi (generic fb)
+    FORCE_RGBMATRIX=1   -> force rgbmatrix backend (skip other autodetect)
+    FORCE_SIM=1         -> force simulation (handled in load)
 """
 from __future__ import annotations
 
@@ -54,6 +55,8 @@ def autodetect_backend() -> str:
         return "inky"
     if os.environ.get("FORCE_HDMI") == "1":
         return "hdmi"
+    if os.environ.get("FORCE_RGBMATRIX") == "1":
+        return "rgbmatrix"
 
     fb_path = "/dev/fb0"
     if os.path.exists(fb_path):

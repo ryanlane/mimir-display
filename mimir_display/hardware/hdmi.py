@@ -21,7 +21,9 @@ Environment variables:
     HDMI_RESOLUTION           Optional override WxH (skips sysfs size if present)
     HDMI_FILL_MODE            Image scaling strategy: 'contain' (default, preserve aspect
                               ratio with black letterbox/pillarbox), 'stretch' (distort to
-                              exact screen), 'cover' (fill and crop excess).
+                              exact screen), 'cover' (fill and crop excess), 'center'
+                              (no scaling; center the original image on a black canvas; if
+                              larger than screen it is center-cropped).
 
 Notes:
     * Unlike HyperPixel driver we do not expose RGB565 endian/channel flips –
@@ -71,7 +73,7 @@ _cached_geom: tuple[int, int, int] | None = None  # w,h,bpp
 _cached_stride: int | None = None
 
 _FILL_MODE = os.getenv("HDMI_FILL_MODE", "contain").strip().lower()
-if _FILL_MODE not in {"contain", "stretch", "cover"}:
+if _FILL_MODE not in {"contain", "stretch", "cover", "center"}:
     _FILL_MODE = "contain"
 
 
@@ -141,6 +143,8 @@ def _prepare_canvas(img: Image.Image, w: int, h: int) -> Image.Image:
         contain: scale to fit inside, keeping aspect, black bars fill remainder.
         stretch: scale to exact size (current legacy behavior, may distort).
         cover:   scale to cover entire screen, cropping overflow, centered.
+        center:  no scaling; paste image centered on black canvas. If image is
+                 larger than the target, crop the central region to fit.
     """
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
@@ -155,6 +159,21 @@ def _prepare_canvas(img: Image.Image, w: int, h: int) -> Image.Image:
         if img.size != (w, h):
             return img.resize((w, h), Image.LANCZOS)
         return img
+
+    # Center mode: no scaling, just center (or center-crop) on black background
+    if _FILL_MODE == "center":
+        canvas = Image.new("RGB", (w, h), (0, 0, 0))
+        src_w, src_h = img.size
+        # If bigger than target, crop central portion first
+        if src_w > w or src_h > h:
+            left = max(0, (src_w - w) // 2)
+            top = max(0, (src_h - h) // 2)
+            img = img.crop((left, top, left + min(w, src_w - left), top + min(h, src_h - top)))
+            src_w, src_h = img.size
+        off_x = (w - src_w) // 2
+        off_y = (h - src_h) // 2
+        canvas.paste(img, (off_x, off_y))
+        return canvas
 
     src_w, src_h = img.size
     if src_w == w and src_h == h:
