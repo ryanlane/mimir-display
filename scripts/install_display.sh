@@ -14,6 +14,9 @@ detect_backend() {
   if [[ ${FORCE_INKY:-} == 1 ]]; then
     echo "inky"; return
   fi
+  if [[ ${FORCE_HDMI:-} == 1 ]]; then
+    echo "hdmi"; return
+  fi
   if [[ ${FORCE_RGBMATRIX:-} == 1 ]]; then
     echo "rgbmatrix"; return
   fi
@@ -23,6 +26,8 @@ detect_backend() {
     if [[ $virt == "720,720" && ( -z $bpp || $bpp == 16 ) ]]; then
       echo "hyperpixelsq"; return
     fi
+    # Any other framebuffer geometry => treat as generic HDMI
+    echo "hdmi"; return
   fi
   # Try probing for rgbmatrix Python binding (best-effort, quiet)
   if command -v python3 >/dev/null 2>&1; then
@@ -48,7 +53,7 @@ LABELS=()
 OPTIONS+=("$SUGGESTED")
 LABELS+=("$SUGGESTED (detected)")
 
-for opt in hyperpixelsq rgbmatrix hdmi inky auto; do
+for opt in hyperpixelsq hdmi rgbmatrix inky auto; do
   if [[ $opt != "$SUGGESTED" ]]; then
     OPTIONS+=("$opt")
     LABELS+=("$opt")

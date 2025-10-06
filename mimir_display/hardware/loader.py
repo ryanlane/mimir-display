@@ -3,8 +3,13 @@
 Resolution order:
 1. Explicit --backend CLI arg
 2. DISPLAY_BACKEND env var
-3. Autodetect known backends (hyperpixelsq, inky)
+3. Autodetect known backends (hyperpixelsq, hdmi generic framebuffer, inky fallback)
 4. Simulation fallback (logs only)
+
+Environment override helpers:
+    FORCE_INKY=1   -> force inky
+    FORCE_HDMI=1   -> force hdmi (generic fb)
+    FORCE_SIM=1    -> force simulation (handled in load)
 """
 from __future__ import annotations
 
@@ -39,19 +44,19 @@ def autodetect_backend() -> str:
     """Best-effort backend autodetection.
 
     Strategy:
-    1. If /dev/fb0 exists inspect sysfs for geometry to detect HyperPixel Square (720x720 @ 16bpp)
-    2. FALLBACK to inky (historical default) when framebuffer not present or size mismatch
-
-    Environment overrides:
-    * FORCE_INKY=1  -> always choose inky (even if fb0 present)
-    * FORCE_SIM=1   -> skip detection and force simulation (handled later when import fails)
+      * Honor FORCE_INKY / FORCE_HDMI early.
+      * If /dev/fb0 exists inspect geometry:
+          - 720x720 (+16bpp) -> hyperpixelsq
+          - anything else -> hdmi (generic framebuffer)
+      * If no framebuffer -> inky (legacy default) to preserve prior behavior.
     """
     if os.environ.get("FORCE_INKY") == "1":
         return "inky"
+    if os.environ.get("FORCE_HDMI") == "1":
+        return "hdmi"
 
     fb_path = "/dev/fb0"
     if os.path.exists(fb_path):
-        # HyperPixel Square characteristics: 720x720 logical resolution, 16bpp rgb565
         virt_size_path = "/sys/class/graphics/fb0/virtual_size"
         bpp_path = "/sys/class/graphics/fb0/bits_per_pixel"
         try:
@@ -65,13 +70,15 @@ def autodetect_backend() -> str:
                     with open(bpp_path, encoding="utf-8") as f2:
                         bpp = int(f2.read().strip())
                 except Exception:
-                    pass  # non-fatal
-                if w == 720 and h == 720 and bpp in (16, 0):  # tolerate unknown bpp
+                    pass
+                if w == 720 and h == 720 and bpp in (16, 0):
                     return "hyperpixelsq"
+                # Any other framebuffer geometry => treat as generic HDMI
+                return "hdmi"
         except Exception:
-            # If any inspection fails but fb0 exists, still assume HyperPixel unless FORCE_INKY
-            return "hyperpixelsq"
-    return "inky"  # default legacy
+            # On inspection error but fb present: prefer hdmi (generic) to avoid mislabeling
+            return "hdmi"
+    return "inky"
 
 
 def load_backend(explicit: str | None = None):
