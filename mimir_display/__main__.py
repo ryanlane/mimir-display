@@ -107,7 +107,13 @@ async def runner():
 def parse_args():
     parser = argparse.ArgumentParser(description="mimir-display entrypoint")
     parser.add_argument('--diagnose-env', action='store_true', help='Print environment diagnostics and exit')
-    parser.add_argument('--backend', choices=['inky', 'hyperpixelsq', 'auto'], default='auto', help='Display backend selection (default: auto)')
+    # Allow additional backends (rgbmatrix, hdmi). Use explicit list so --help stays informative.
+    parser.add_argument(
+        '--backend',
+        choices=['inky', 'hyperpixelsq', 'rgbmatrix', 'hdmi', 'auto'],
+        default='auto',
+        help='Display backend selection (default: auto)'
+    )
     return parser.parse_args()
 
 
