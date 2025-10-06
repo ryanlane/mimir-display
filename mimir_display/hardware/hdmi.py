@@ -15,10 +15,13 @@ Design principles:
 
 Environment variables:
     HDMI_FRAMEBUFFER          Path to fb device (default: /dev/fb0)
-    HDMI_FORCE_BPP           Force treat fb as 16 / 24 / 32 (overrides sysfs)
-    HDMI_8888_SEQ            Byte sequence for 32bpp (chars in {R,G,B,A,X}, default BGRX)
-    HDMI_LOG_FIRST_BYTES     If int>0 log hexdump of first N bytes of first write
-    HDMI_RESOLUTION          Optional override WxH (skips sysfs size if present)
+    HDMI_FORCE_BPP            Force treat fb as 16 / 24 / 32 (overrides sysfs)
+    HDMI_8888_SEQ             Byte sequence for 32bpp (chars in {R,G,B,A,X}, default BGRX)
+    HDMI_LOG_FIRST_BYTES      If int>0 log hexdump of first N bytes of first write
+    HDMI_RESOLUTION           Optional override WxH (skips sysfs size if present)
+    HDMI_FILL_MODE            Image scaling strategy: 'contain' (default, preserve aspect
+                              ratio with black letterbox/pillarbox), 'stretch' (distort to
+                              exact screen), 'cover' (fill and crop excess).
 
 Notes:
     * Unlike HyperPixel driver we do not expose RGB565 endian/channel flips –
@@ -29,10 +32,11 @@ Notes:
 """
 from __future__ import annotations
 
-import os
 import mmap
-from dataclasses import dataclass
+import os
+
 from PIL import Image
+
 from mimir_display.utils.orientation import orientation_info
 
 FB_PATH = os.getenv("HDMI_FRAMEBUFFER", "/dev/fb0")
@@ -66,10 +70,14 @@ else:
 _cached_geom: tuple[int, int, int] | None = None  # w,h,bpp
 _cached_stride: int | None = None
 
+_FILL_MODE = os.getenv("HDMI_FILL_MODE", "contain").strip().lower()
+if _FILL_MODE not in {"contain", "stretch", "cover"}:
+    _FILL_MODE = "contain"
+
 
 def _read_sysfs(path: str) -> str | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return None
@@ -126,11 +134,64 @@ def hardware_available() -> bool:
         return False
 
 
-def _convert_image(img: Image.Image, w: int, h: int, bpp: int) -> bytes:
+def _prepare_canvas(img: Image.Image, w: int, h: int) -> Image.Image:
+    """Return an RGB image exactly (w,h) using selected fill mode.
+
+    Modes:
+        contain: scale to fit inside, keeping aspect, black bars fill remainder.
+        stretch: scale to exact size (current legacy behavior, may distort).
+        cover:   scale to cover entire screen, cropping overflow, centered.
+    """
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
-    if img.size != (w, h):
-        img = img.resize((w, h), Image.LANCZOS)
+    else:
+        # If RGBA ensure we composite onto black to avoid white fringing.
+        if img.mode == "RGBA":
+            bg = Image.new("RGBA", img.size, (0, 0, 0, 255))
+            bg.alpha_composite(img)
+            img = bg.convert("RGB")
+
+    if _FILL_MODE == "stretch":
+        if img.size != (w, h):
+            return img.resize((w, h), Image.LANCZOS)
+        return img
+
+    src_w, src_h = img.size
+    if src_w == w and src_h == h:
+        return img if img.mode == "RGB" else img.convert("RGB")
+
+    # Compute scale factors
+    scale_x = w / src_w
+    scale_y = h / src_h
+    if _FILL_MODE == "contain":
+        scale = min(scale_x, scale_y)
+    else:  # cover
+        scale = max(scale_x, scale_y)
+    new_w = max(1, int(round(src_w * scale)))
+    new_h = max(1, int(round(src_h * scale)))
+    resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+    # For contain -> paste centered onto black canvas
+    if _FILL_MODE == "contain":
+        canvas = Image.new("RGB", (w, h), (0, 0, 0))
+        off_x = (w - new_w) // 2
+        off_y = (h - new_h) // 2
+        canvas.paste(resized, (off_x, off_y))
+        return canvas
+
+    # cover: crop center to screen size
+    if new_w == w and new_h == h:
+        return resized.convert("RGB") if resized.mode != "RGB" else resized
+    # Crop box
+    left = (new_w - w) // 2
+    top = (new_h - h) // 2
+    box = (left, top, left + w, top + h)
+    cropped = resized.crop(box)
+    return cropped.convert("RGB") if cropped.mode != "RGB" else cropped
+
+
+def _convert_image(img: Image.Image, w: int, h: int, bpp: int) -> bytes:
+    img = _prepare_canvas(img, w, h)
     pixels = img.load()
     if bpp == 16:
         # Generic RGB565, assume little-endian typical HDMI fb on Pi.
@@ -170,7 +231,7 @@ def display_image(image_path: str) -> None:
     if not os.path.exists(image_path):
         raise FileNotFoundError(image_path)
     w, h, bpp = _detect_geometry()
-    img = Image.open(image_path).convert("RGB")
+    img = Image.open(image_path)
     data = _convert_image(img, w, h, bpp)
     stride = _get_stride()
     bytes_pp = 2 if bpp == 16 else max(bpp // 8, 3)
@@ -200,10 +261,6 @@ def display_image(image_path: str) -> None:
             mm.close()
 
 
-def is_development_mode() -> bool:
-    return not hardware_available()
-
-
 def get_display_capabilities() -> dict:
     w, h, bpp = _detect_geometry()
     oinfo = orientation_info(w, h)
@@ -227,6 +284,7 @@ def get_display_capabilities() -> dict:
             "path": FB_PATH,
             "stride": stride,
         },
+        "fill_mode": _FILL_MODE,
     }
 
 
