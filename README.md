@@ -5,6 +5,7 @@ Unified display client for Raspberry Pi supporting multiple hardware backends (I
 ## Features
 * Dynamic backend selection (`--backend` or `DISPLAY_BACKEND=auto`)
 * Inky and HyperPixel RGB565 framebuffer support (multi-bpp, stride + RGB565 endianness/channel overrides)
+* Generic HDMI fullscreen window backend (pygame or tkinter fallback)
 * RGB LED Matrix (hzeller/rpi-rgb-led-matrix) backend for HUB75 panels (via `rgbmatrix` bindings)
 * Orientation handling via `DISPLAY_ORIENTATION` (landscape / portrait_left / portrait_right)
 * Startup logo image (centered) + optional HyperPixel test pattern (`STARTUP_TEST_PATTERN=1`)
@@ -46,7 +47,7 @@ mimir-display --backend auto
 ## Environment Variables (.env)
 | Key | Description | Example |
 |-----|-------------|---------|
-| DISPLAY_BACKEND | Backend selection (`auto`, `inky`, `hyperpixelsq`, `rgbmatrix`) | `DISPLAY_BACKEND=auto` |
+| DISPLAY_BACKEND | Backend selection (`auto`, `inky`, `hyperpixelsq`, `rgbmatrix`, `hdmi`) | `DISPLAY_BACKEND=auto` |
 | DISPLAY_ORIENTATION | Physical mounting: `landscape`, `portrait_left`, `portrait_right` | `DISPLAY_ORIENTATION=portrait_left` |
 | STARTUP_LOGO_PATH | Override path to startup image (defaults to built-in `startup.png`) | `/opt/mimir-display/logo.png` |
 | STARTUP_TEST_PATTERN | If `1` and HyperPixel backend, render diagnostic gradient before logo | `STARTUP_TEST_PATTERN=1` |
@@ -59,6 +60,10 @@ mimir-display --backend auto
 | HYPERPIXEL_FORCE_BPP | Force treat framebuffer as 16/24/32 bpp | `HYPERPIXEL_FORCE_BPP=16` |
 | HYPERPIXEL_8888_SEQ | 4-byte sequence for 32bpp layout (chars in `RGBAX`) | `HYPERPIXEL_8888_SEQ=BGRX` |
 | HYPERPIXEL_LOG_FIRST_BYTES | Log first N bytes of first framebuffer write | `HYPERPIXEL_LOG_FIRST_BYTES=64` |
+| HDMI_RESOLUTION | Force window/native size (WxH) | `HDMI_RESOLUTION=1920x1080` |
+| HDMI_WINDOWED | If `1`, run in a window (not fullscreen) | `HDMI_WINDOWED=1` |
+| HDMI_SCALE_MODE | `fit` (letterbox) or `fill` scale strategy | `HDMI_SCALE_MODE=fit` |
+| HDMI_BG_COLOR | Hex background for letterbox (#RRGGBB) | `HDMI_BG_COLOR=#000000` |
 | RGBMATRIX_ROWS | Panel rows (e.g. 32, 64) | `RGBMATRIX_ROWS=64` |
 | RGBMATRIX_CHAIN_LENGTH | Daisy chained panels | `RGBMATRIX_CHAIN_LENGTH=2` |
 | RGBMATRIX_PARALLEL | Parallel chains (advanced) | `RGBMATRIX_PARALLEL=1` |
@@ -111,6 +116,8 @@ sudo systemctl enable --now mimir-display
 
 `rgbmatrix` is not auto-detected (requires explicit `--backend rgbmatrix` or `DISPLAY_BACKEND=rgbmatrix`). This avoids
 mis-identification on systems that also have a framebuffer.
+
+`hdmi` backend is not auto-detected either; specify `--backend hdmi` or set `DISPLAY_BACKEND=hdmi`.
 
 Environment shortcuts:
 * `FORCE_INKY=1` to bypass framebuffer detection
@@ -297,6 +304,29 @@ Key behaviors:
 
 ## Adding a New Backend
 Implement a module exposing: `get_display_capabilities()`, `display_image(path)`, `is_development_mode()`. Add it to the mapping in `hardware/loader.py`. Capabilities should include: `resolution`, `native_resolution`, `orientation`, `rotation_deg`, supported formats, backend name, and any diagnostic fields (e.g., stride, bpp).
+
+### HDMI Backend Notes
+The HDMI backend opens a fullscreen window (via `pygame` when available, falling back to `tkinter`) and renders images there. It does not directly mmap the framebuffer which keeps it portable to desktop development machines. Install with the extra:
+
+```
+pip install .[hdmi]
+```
+
+Environment quick start:
+
+```
+DISPLAY_BACKEND=hdmi
+HDMI_RESOLUTION=1920x1080
+HDMI_SCALE_MODE=fit
+```
+
+If you prefer running windowed while iterating locally:
+
+```
+HDMI_WINDOWED=1
+```
+
+When `fit` scaling is used and the aspect ratio of the source image differs, the image is centered and letterboxed with `HDMI_BG_COLOR` (default black). Use `fill` to stretch/crop instead (maintains full coverage without preserving aspect).
 
 ## License
 MIT

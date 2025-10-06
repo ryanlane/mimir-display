@@ -48,12 +48,16 @@ rgbmatrix = [
     # Intentionally empty: hzeller/rpi-rgb-led-matrix is built/installed externally.
     # Presence of this extra enables uniform installer syntax (."[rgbmatrix]") without pip fetching anything.
 ]
+hdmi = [
+    "pygame>=2.5.0",
+]
 all = [
     # Convenience meta-extra; user installs all hardware support + dev tooling
     "inky",
     "numpy<2.0.0",
     "RPi.GPIO>=0.7.1",
     "spidev>=3.5",
+    "pygame>=2.5.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -70,9 +74,9 @@ dev = [
 mimir-display = "mimir_display.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/display-client-inky-mimir"
-Repository = "https://github.com/yourusername/display-client-inky-mimir"
-Issues = "https://github.com/yourusername/display-client-inky-mimir/issues"
+Homepage = "https://github.com/ryanlane/mimir-displayr"
+Repository = "https://github.com/ryanlane/mimir-display.git"
+Issues = "https://github.com/ryanlane/mimir-display/issues"
 
 [tool.setuptools.packages.find]
 include = ["mimir_display*"]

@@ -48,7 +48,7 @@ LABELS=()
 OPTIONS+=("$SUGGESTED")
 LABELS+=("$SUGGESTED (detected)")
 
-for opt in hyperpixelsq rgbmatrix inky auto; do
+for opt in hyperpixelsq rgbmatrix hdmi inky auto; do
   if [[ $opt != "$SUGGESTED" ]]; then
     OPTIONS+=("$opt")
     LABELS+=("$opt")
@@ -64,7 +64,7 @@ CHOICE=${CHOICE:-1}
 if ! [[ $CHOICE =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > ${#OPTIONS[@]} )); then
   echo "[warn] Invalid choice; defaulting to option 1 (${OPTIONS[0]})" >&2
   CHOICE=1
-fi
+fi  
 BACKEND="${OPTIONS[$((CHOICE-1))]}"
 echo "[+] Selected backend: $BACKEND" >&2
 
@@ -74,6 +74,7 @@ case "$BACKEND" in
   inky) EXTRA="[inky]" ;;
   hyperpixelsq) EXTRA="[hyperpixelsq]" ;;
   rgbmatrix) EXTRA="[rgbmatrix]" ;;
+  hdmi) EXTRA="[hdmi]" ;;
   auto) EXTRA="[all]" ;;
 esac
 

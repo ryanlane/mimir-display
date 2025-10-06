@@ -24,6 +24,7 @@ _KNOWN_MODULES = {
     "inky": "mimir_display.hardware.eframe_inky",
     "simulation": "mimir_display.hardware.simulation",
     "rgbmatrix": "mimir_display.hardware.rgbmatrix_led",
+    "hdmi": "mimir_display.hardware.hdmi",
 }
 
 
