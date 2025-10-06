@@ -6,16 +6,17 @@ Prerequisites:
     and https://github.com/hzeller/rpi-rgb-led-matrix
 
 Environment Variables (all optional):
-  RGBMATRIX_ROWS               Panel rows (32, 64, 128 ...). Default: 32
-  RGBMATRIX_CHAIN_LENGTH       Number of daisy-chained panels. Default: 1
-  RGBMATRIX_PARALLEL           Parallel chains (advanced). Default: 1
-  RGBMATRIX_HARDWARE_MAPPING   Hardware mapping string (e.g. "adafruit-hat", "adafruit-hat-pwm", "regular"). Default: "regular"
-  RGBMATRIX_GPIO_SLOWDOWN      0..4 slowdown for timing sensitive setups. Default: unset (library default)
-  RGBMATRIX_PWM_BITS           PWM bit-depth (1..11 typical). Default: unset (library default)
-  RGBMATRIX_BRIGHTNESS         1..100 panel brightness. Default: 50
-  RGBMATRIX_LIMIT_FPS          Software cap on refresh rate. Default: unset
-  RGBMATRIX_PIXEL_MAPPER       Pixel mapper string (e.g. "Rotate:90"). We rely on our own rotation logic; leave unset.
-  DISPLAY_ORIENTATION          Re‑used orientation variable (landscape/portrait_left/portrait_right/square)
+    RGBMATRIX_ROWS               Panel rows (height) (16, 32, 64, 128 ...). Default: 32
+    RGBMATRIX_WIDTH              Panel width override for single panel setups (16, 32, 64 ...). If unset we infer.
+    RGBMATRIX_CHAIN_LENGTH       Number of daisy-chained panels (widens display). Default: 1
+    RGBMATRIX_PARALLEL           Parallel chains (advanced). Default: 1
+    RGBMATRIX_HARDWARE_MAPPING   Hardware mapping string (e.g. "adafruit-hat", "adafruit-hat-pwm", "regular"). Default: "regular"
+    RGBMATRIX_GPIO_SLOWDOWN      0..4 slowdown for timing sensitive setups. Default: unset (library default)
+    RGBMATRIX_PWM_BITS           PWM bit-depth (1..11 typical). Default: unset (library default)
+    RGBMATRIX_BRIGHTNESS         1..100 panel brightness. Default: 50
+    RGBMATRIX_LIMIT_FPS          Software cap on refresh rate. Default: unset
+    RGBMATRIX_PIXEL_MAPPER       Pixel mapper string (e.g. "Rotate:90"). We rely on our own rotation logic; leave unset.
+    DISPLAY_ORIENTATION          Re‑used orientation variable (landscape/portrait_left/portrait_right/square)
 
 Capabilities strategy:
   * We treat the *logical* resolution as (rows * chain_length * width_per_panel, rows) typical for standard panels
@@ -34,6 +35,7 @@ import logging
 import os
 
 from PIL import Image  # type: ignore
+
 from mimir_display.utils.orientation import orientation_info
 
 logger = logging.getLogger(__name__)
@@ -115,12 +117,31 @@ def _get_native_resolution() -> tuple[int, int]:
     _init_matrix()
     if _cached_resolution:
         return _cached_resolution
-    # Fallback heuristic: rows * chain_length width of 64 if rows in (32,64) else rows.
     rows = int(os.getenv("RGBMATRIX_ROWS", "32") or 32)
     chain = int(os.getenv("RGBMATRIX_CHAIN_LENGTH", "1") or 1)
-    # Assume common panel aspect: 32x64 or 64x64 (H x W). If rows == 32 -> width 64 * chain; if 64 -> 64 * chain.
-    width_guess = 64 * chain
-    return (width_guess, rows)
+    width_override_env = os.getenv("RGBMATRIX_WIDTH")
+    width_override = None
+    try:
+        if width_override_env:
+            width_override = int(width_override_env)
+    except ValueError:
+        width_override = None
+
+    if width_override and width_override > 0:
+        base_width = width_override
+    else:
+        # Improved heuristic:
+        #  * Square panels (16,32,64,128) frequently WxH = rows
+        #  * 32x64 panels are common (height=32 width=64)
+        #  * If rows in {16,32,64,128} and no explicit width, prefer square assumption first.
+        if rows in {16, 32, 64, 128}:
+            base_width = rows
+        else:
+            # Fallback to typical 64 width for rows 32/64 (already handled) else rows.
+            base_width = rows
+        # Special case: if user explicitly set ENV HxW pair historically (rows=32 but wants 64) they can set RGBMATRIX_WIDTH=64.
+    width = base_width * chain
+    return (width, rows)
 
 
 def display_image(image_path: str) -> None:
@@ -184,6 +205,7 @@ def get_display_capabilities() -> dict:
         "chain_length": int(os.getenv("RGBMATRIX_CHAIN_LENGTH", "1") or 1),
         "parallel": int(os.getenv("RGBMATRIX_PARALLEL", "1") or 1),
         "brightness": int(os.getenv("RGBMATRIX_BRIGHTNESS", "50") or 50),
+        "width_override": os.getenv("RGBMATRIX_WIDTH") or None,
     }
 
 
