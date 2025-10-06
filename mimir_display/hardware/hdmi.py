@@ -50,13 +50,18 @@ except Exception:  # pragma: no cover
 
 @dataclass
 class _State:
+    # Native (desktop) dimensions selected for the window / fullscreen surface
     width: int
     height: int
+    # Logical (post-orientation) dimensions exposed to rest of system
+    logical_width: int
+    logical_height: int
     windowed: bool
     scale_mode: str
     bg_color: tuple[int, int, int]
     orientation: str
     rotation_deg: int
+    detected: bool  # whether resolution was auto-detected (vs env/default)
 
 
 _state: _State | None = None
@@ -67,16 +72,32 @@ _tk_root = None  # type: ignore
 _DEF_BG = (0, 0, 0)
 
 
-def _parse_resolution() -> tuple[int, int]:
+def _parse_resolution() -> tuple[tuple[int, int], bool]:
+    """Return (resolution, detected_flag).
+
+    Priority:
+      1. Explicit HDMI_RESOLUTION env (detected_flag=False)
+      2. Pygame desktop display current_w/current_h if pygame present (detected_flag=True)
+      3. Fallback default 1280x720 (detected_flag=False)
+    """
     env = os.getenv("HDMI_RESOLUTION")
     if env and "x" in env:
         try:
             w_s, h_s = env.lower().split("x", 1)
-            return int(w_s), int(h_s)
+            return (int(w_s), int(h_s)), False
         except Exception:
             pass
-    # Try pygame display info if available (after init); else a common default.
-    return 1280, 720
+    # Attempt auto-detect via pygame (if already imported successfully)
+    if _HAS_PYGAME:
+        try:  # pragma: no cover - depends on runtime video subsystem
+            if not pygame.get_init():
+                pygame.display.init()
+            info = pygame.display.Info()
+            if getattr(info, "current_w", 0) and getattr(info, "current_h", 0):
+                return (int(info.current_w), int(info.current_h)), True
+        except Exception:
+            pass
+    return (1280, 720), False
 
 
 def _parse_bg() -> tuple[int, int, int]:
@@ -97,7 +118,7 @@ def _init_state() -> _State:
     if _state is not None:
         return _state
 
-    base_w, base_h = _parse_resolution()
+    (base_w, base_h), detected = _parse_resolution()
     oinfo = orientation_info(base_w, base_h)
     scale_mode = os.getenv("HDMI_SCALE_MODE", "fit").lower()
     if scale_mode not in {"fit", "fill"}:
@@ -118,11 +139,14 @@ def _init_state() -> _State:
     _state = _State(
         width=base_w,
         height=base_h,
+        logical_width=oinfo.logical_width,
+        logical_height=oinfo.logical_height,
         windowed=windowed,
         scale_mode=scale_mode,
         bg_color=bg_color,
         orientation=oinfo.name,
         rotation_deg=oinfo.rotation_deg,
+        detected=detected,
     )
     return _state
 
@@ -144,7 +168,9 @@ def get_display_capabilities() -> dict:
     st = _init_state()
     # Logical dims may swap for portrait, orientation_info already handled.
     return {
-        "resolution": [st.width, st.height],  # We treat window size as logical
+        # Logical (orientation-adjusted) resolution exposed to upstream services
+        "resolution": [st.logical_width, st.logical_height],
+        # Native desktop/window resolution (pre-orientation)
         "native_resolution": [st.width, st.height],
         "orientation": st.orientation,
         "rotation_deg": st.rotation_deg,
@@ -159,6 +185,7 @@ def get_display_capabilities() -> dict:
         "windowed": st.windowed,
         "bg_color": st.bg_color,
         "driver": "pygame" if _HAS_PYGAME else ("tkinter" if tk else "none"),
+        "auto_detected_resolution": st.detected,
     }
 
 
