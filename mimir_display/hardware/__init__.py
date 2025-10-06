@@ -14,8 +14,9 @@ Public API (stable):
 
 from __future__ import annotations
 
-from typing import Any, Tuple
 import os
+import traceback
+from typing import Any
 
 from .loader import load_backend
 
@@ -38,7 +39,11 @@ def get_display_capabilities() -> dict:
     mod = _ensure_backend()
     try:
         return mod.get_display_capabilities()
-    except Exception:  # pragma: no cover - defensive
+    except Exception as e:  # pragma: no cover - defensive
+        debug = os.getenv("DISPLAY_CAPS_DEBUG") == "1"
+        if debug:
+            print("[hardware] capability retrieval failed:", e)
+            traceback.print_exc()
         return {
             "resolution": [800, 480],
             "native_resolution": [800, 480],
@@ -50,10 +55,11 @@ def get_display_capabilities() -> dict:
             "content_claiming": True,
             "simulation_mode": True,
             "backend": "simulation(fallback)",
+            "cap_error": type(e).__name__,
         }
 
 
-def get_display_resolution() -> Tuple[int, int]:
+def get_display_resolution() -> tuple[int, int]:
     caps = get_display_capabilities()
     res = caps.get("resolution") or caps.get("native_resolution") or [800, 480]
     try:
@@ -85,16 +91,16 @@ def is_development_mode() -> bool:
 
 
 def _hardware_available() -> bool:
-	caps = get_display_capabilities()
-	return not caps.get("simulation_mode", True)
+    caps = get_display_capabilities()
+    return not caps.get("simulation_mode", True)
 
 
 HARDWARE_AVAILABLE = _hardware_available()
 
 __all__ = [
-	"get_display_resolution",
-	"display_image",
-	"is_development_mode",
-	"get_display_capabilities",
-	"HARDWARE_AVAILABLE",
+    "get_display_resolution",
+    "display_image",
+    "is_development_mode",
+    "get_display_capabilities",
+    "HARDWARE_AVAILABLE",
 ]
