@@ -117,8 +117,26 @@ def ensure_dir(path: str) -> str:
         return path
     # Defense in depth: sanitize here too, in case callers forgot.
     cleaned = sanitize_path(path)
-    os.makedirs(cleaned, exist_ok=True)
-    return cleaned
+    try:
+        os.makedirs(cleaned, exist_ok=True)
+        return cleaned
+    except PermissionError:
+        # If it's a relative path (starts with '.' or no leading slash) and we lack permission,
+        # attempt a fallback under /var/lib/mimir-display (typical writable hierarchy when running as root).
+        if not os.path.isabs(cleaned):
+            fallback_root = "/var/lib/mimir-display"
+            fallback = os.path.join(fallback_root, cleaned.lstrip('./'))
+            try:
+                os.makedirs(fallback, exist_ok=True)
+            except Exception:
+                # Re-raise original if fallback also fails
+                raise
+            else:
+                logging.getLogger("display_client").warning(
+                    "Directory '%s' not writable; using fallback '%s'", cleaned, fallback
+                )
+                return fallback
+        raise
 
 
 def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
