@@ -20,6 +20,7 @@ Environment Variables (all optional):
     RGBMATRIX_PIXEL_MAPPER       Pixel mapper string (e.g. "Rotate:90"). We rely on our own rotation logic; leave unset.
     DISPLAY_ORIENTATION          Re‑used orientation variable (landscape/portrait_left/portrait_right/square)
     ALLOW_RGBMATRIX_SIM          If set to 1, allow simulation fallback when library missing or init fails. Default: unset (hard fail)
+    RGBMATRIX_NO_HARDWARE_PULSE  If set (1/true), uses --led-no-hardware-pulse equivalent to avoid snd_bcm2835 GPIO timing conflicts.
 
 Capabilities strategy:
   * We treat the *logical* resolution as (rows * chain_length * width_per_panel, rows) typical for standard panels
@@ -128,6 +129,13 @@ def _build_options() -> RGBMatrixOptions:  # type: ignore[name-defined]
             opts.limit_refresh_rate_hz = int(val)
         except ValueError:
             pass
+    # Disable hardware pulse if audio driver conflicts (maps to --led-no-hardware-pulse)
+    if os.getenv("RGBMATRIX_NO_HARDWARE_PULSE", "").lower() in {"1", "true", "yes"}:
+        if hasattr(opts, "disable_hardware_pulsing"):
+            try:
+                opts.disable_hardware_pulsing = True  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - defensive
+                pass
     # brightness handled at matrix level later if provided
     return opts
 
