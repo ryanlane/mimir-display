@@ -13,6 +13,8 @@ Environment Variables (all optional):
     RGBMATRIX_HARDWARE_MAPPING   Hardware mapping string (e.g. "adafruit-hat", "adafruit-hat-pwm", "regular"). Default: "regular"
     RGBMATRIX_GPIO_SLOWDOWN      0..4 slowdown for timing sensitive setups. Default: unset (library default)
     RGBMATRIX_PWM_BITS           PWM bit-depth (1..11 typical). Default: unset (library default)
+    RGBMATRIX_PWM_DITHER_BITS    Dither bits (demo flag -D) for improved low brightness gradients. Default: unset
+    RGBMATRIX_MULTIPLEXING       Multiplexing mode (demo flag --led-multiplexing). Leave unset unless required. Default: unset
     RGBMATRIX_BRIGHTNESS         1..100 panel brightness. Default: 50
     RGBMATRIX_LIMIT_FPS          Software cap on refresh rate. Default: unset
     RGBMATRIX_PIXEL_MAPPER       Pixel mapper string (e.g. "Rotate:90"). We rely on our own rotation logic; leave unset.
@@ -25,7 +27,28 @@ Capabilities strategy:
   * Orientation is applied virtually using Pillow image rotation before pushing to the hardware.
 
 Error handling:
-  * If the rgbmatrix module or construction fails we mark simulation_mode True and just log what would display.
+    * If the rgbmatrix module or construction fails we mark simulation_mode True and just log what would display.
+
+Root / privilege note:
+    * The underlying C++ library usually requires root on Raspberry Pi (sudo) to access GPIO; we warn if not root.
+
+Mapping example from the demo you used:
+    --led-multiplexing=0      -> RGBMATRIX_MULTIPLEXING=0
+    --led-rows=32             -> RGBMATRIX_ROWS=32
+    --led-cols=32             -> RGBMATRIX_WIDTH=32 (single 32x32 panel)
+    -D4 (PWM dither bits)     -> RGBMATRIX_PWM_DITHER_BITS=4
+    --led-slowdown-gpio=5     -> RGBMATRIX_GPIO_SLOWDOWN=5
+    --led-gpio-mapping=adafruit-hat -> RGBMATRIX_HARDWARE_MAPPING=adafruit-hat
+
+Example launch (mirrors demo flags):
+    sudo RGBMATRIX_ROWS=32 \\
+             RGBMATRIX_WIDTH=32 \\
+             RGBMATRIX_MULTIPLEXING=0 \\
+             RGBMATRIX_GPIO_SLOWDOWN=5 \\
+             RGBMATRIX_HARDWARE_MAPPING=adafruit-hat \\
+             RGBMATRIX_PWM_DITHER_BITS=4 \\
+             RGBMATRIX_BRIGHTNESS=50 \\
+             python -m mimir_display
 
 This backend only supports RGB color images (jpg/png) and ignores alpha.
 """
@@ -66,6 +89,14 @@ def _build_options() -> RGBMatrixOptions:  # type: ignore[name-defined]
     opts.chain_length = _env_int("RGBMATRIX_CHAIN_LENGTH", 1)
     opts.parallel = _env_int("RGBMATRIX_PARALLEL", 1)
     opts.hardware_mapping = os.getenv("RGBMATRIX_HARDWARE_MAPPING", "regular")
+    # Optional multiplexing (rare panels) -- maps from demo flag --led-multiplexing
+    if (val := os.getenv("RGBMATRIX_MULTIPLEXING")) is not None:
+        try:
+            mux_val = int(val)
+            if hasattr(opts, "multiplexing"):
+                opts.multiplexing = mux_val  # type: ignore[attr-defined]
+        except ValueError:
+            pass
     # Optional tuning parameters
     if (val := os.getenv("RGBMATRIX_GPIO_SLOWDOWN")) is not None:
         try:
@@ -75,6 +106,12 @@ def _build_options() -> RGBMatrixOptions:  # type: ignore[name-defined]
     if (val := os.getenv("RGBMATRIX_PWM_BITS")) is not None:
         try:
             opts.pwm_bits = int(val)
+        except ValueError:
+            pass
+    if (val := os.getenv("RGBMATRIX_PWM_DITHER_BITS")) is not None:
+        try:
+            if hasattr(opts, "pwm_dither_bits"):
+                opts.pwm_dither_bits = int(val)  # type: ignore[attr-defined]
         except ValueError:
             pass
     if (val := os.getenv("RGBMATRIX_LIMIT_FPS")) is not None:
@@ -94,20 +131,44 @@ def _init_matrix() -> None:
     if RGBMatrix is None or RGBMatrixOptions is None:
         _simulation_mode = True
         return
+    # Warn if not root (common library requirement for GPIO access)
+    if os.name != "nt":  # pragma: no cover - platform dependent
+        geteuid = getattr(os, "geteuid", None)
+        try:
+            if geteuid is not None and geteuid() != 0:  # type: ignore[call-arg]
+                logger.warning("[rgbmatrix] Not running as root; hardware access may fail. Use sudo if needed.")
+        except OSError:
+            # Ignore inability to determine effective user id
+            pass
     try:
         opts = _build_options()
         _matrix = RGBMatrix(options=opts)
         # brightness
-        try:
-            b_str = os.getenv("RGBMATRIX_BRIGHTNESS")
-            if b_str:
+        b_str = os.getenv("RGBMATRIX_BRIGHTNESS")
+        if b_str:
+            try:
                 b_int = max(1, min(100, int(b_str)))
                 _matrix.brightness = b_int  # type: ignore[attr-defined]
-        except Exception:  # pragma: no cover
-            pass
+            except ValueError:  # pragma: no cover
+                logger.warning("[rgbmatrix] invalid brightness value: %s", b_str)
         # Cache width/height
         _cached_resolution = (_matrix.width, _matrix.height)  # type: ignore[attr-defined]
-    except Exception as e:  # pragma: no cover - hardware init failure
+        # Diagnostic logging of effective configuration
+        logger.info(
+            "[rgbmatrix] init rows=%s width=%s chain=%s parallel=%s mux=%s gpio_slowdown=%s pwm_bits=%s pwm_dither=%s brightness=%s hw=%s limit_fps=%s",
+            os.getenv("RGBMATRIX_ROWS"),
+            _cached_resolution[0] if _cached_resolution else None,
+            os.getenv("RGBMATRIX_CHAIN_LENGTH"),
+            os.getenv("RGBMATRIX_PARALLEL"),
+            os.getenv("RGBMATRIX_MULTIPLEXING"),
+            os.getenv("RGBMATRIX_GPIO_SLOWDOWN"),
+            os.getenv("RGBMATRIX_PWM_BITS"),
+            os.getenv("RGBMATRIX_PWM_DITHER_BITS"),
+            os.getenv("RGBMATRIX_BRIGHTNESS"),
+            os.getenv("RGBMATRIX_HARDWARE_MAPPING"),
+            os.getenv("RGBMATRIX_LIMIT_FPS"),
+        )
+    except (RuntimeError, OSError, ValueError) as e:  # pragma: no cover - hardware init failure
         _init_error = e
         _simulation_mode = True
         logger.warning("[rgbmatrix] init failed -> simulation: %s", e)
@@ -173,10 +234,10 @@ def display_image(image_path: str) -> None:
         logger.info("[rgbmatrix][SIM] Would display %s (%sx%s)", image_path, native_w, native_h)
         return
 
+    # The library expects image sized to panel; SetImage handles conversion
     try:
-        # The library expects image sized to panel; SetImage handles conversion
         _matrix.SetImage(img)  # type: ignore[func-returns-value]
-    except Exception as e:  # pragma: no cover
+    except (RuntimeError, OSError) as e:  # pragma: no cover
         logger.error("[rgbmatrix] SetImage failed: %s", e)
 
 
@@ -206,6 +267,8 @@ def get_display_capabilities() -> dict:
         "parallel": int(os.getenv("RGBMATRIX_PARALLEL", "1") or 1),
         "brightness": int(os.getenv("RGBMATRIX_BRIGHTNESS", "50") or 50),
         "width_override": os.getenv("RGBMATRIX_WIDTH") or None,
+        "multiplexing": os.getenv("RGBMATRIX_MULTIPLEXING"),
+        "pwm_dither_bits": os.getenv("RGBMATRIX_PWM_DITHER_BITS"),
     }
 
 
