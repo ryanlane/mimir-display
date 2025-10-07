@@ -120,16 +120,6 @@ if [[ "$SERVICE_USER" == "root" ]]; then
       echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
     fi
   fi
-  
-  # Also fix install directory ownership when service runs as root
-  if [[ -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REPO_ROOT" ]]; then
-    info "Ensuring install directory ownership matches service user"
-    if [[ $DRY_RUN == 0 ]]; then
-      maybe_sudo chown -R root:root "$INSTALL_DIR"
-    else
-      echo "DRY_RUN: chown -R root:root $INSTALL_DIR"
-    fi
-  fi
 fi
 
 if [[ ! -d $INSTALL_DIR ]]; then
@@ -150,6 +140,17 @@ fi
 if [[ $NEED_SYNC == 1 ]]; then
   info "Stopping service before sync (if running)"
   if [[ $DRY_RUN == 0 ]]; then maybe_sudo systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true; else echo "DRY_RUN: systemctl stop ${SERVICE_NAME}.service"; fi
+  
+  # Fix ownership before attempting any file operations on INSTALL_DIR
+  if [[ "$SERVICE_USER" == "root" && -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REPO_ROOT" ]]; then
+    info "Ensuring install directory ownership for sync operations"
+    if [[ $DRY_RUN == 0 ]]; then
+      maybe_sudo chown -R root:root "$INSTALL_DIR"
+    else
+      echo "DRY_RUN: chown -R root:root $INSTALL_DIR"
+    fi
+  fi
+  
   info "Synchronizing source -> install (rsync)"
   # --- Environment file preservation ---------------------------------------
   # We NEVER want to lose a deployment's live .env by virtue of --delete.
