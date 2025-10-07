@@ -161,7 +161,15 @@ if [[ $NEED_SYNC == 1 ]]; then
   ENV_PATH="$INSTALL_DIR/.env"
   if [[ -f $ENV_PATH ]]; then
     ts=$(date +%Y%m%d-%H%M%S)
-    if [[ $DRY_RUN == 0 ]]; then cp "$ENV_PATH" "$INSTALL_DIR/.env.backup-$ts"; else echo "DRY_RUN: cp $ENV_PATH $INSTALL_DIR/.env.backup-$ts"; fi
+    # Backup to temp location first, then move with appropriate permissions
+    TEMP_BACKUP="/tmp/.env.backup-$ts"
+    FINAL_BACKUP="$INSTALL_DIR/.env.backup-$ts"
+    if [[ $DRY_RUN == 0 ]]; then 
+      cp "$ENV_PATH" "$TEMP_BACKUP"
+      maybe_sudo_root_target mv "$TEMP_BACKUP" "$FINAL_BACKUP"
+    else 
+      echo "DRY_RUN: cp $ENV_PATH $TEMP_BACKUP && mv $TEMP_BACKUP $FINAL_BACKUP"
+    fi
     info "Backed up existing .env -> .env.backup-$ts"
   fi
   RSYNC_EXCLUDES=(--exclude .venv --exclude .git --exclude __pycache__)
