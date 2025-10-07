@@ -5,15 +5,13 @@ This module provides an MQTT-only display client that operates in discovery mode
 It is PURE-ASYNC: there is NO asyncio.run(...) here. Loop driving happens in the top-level entrypoint.
 """
 
-import os
-import sys
-import json
 import asyncio
 import contextlib
-import signal
+import json
+import os
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 from .config import Config
 import re
@@ -22,6 +20,7 @@ from .network import WebhookServer, MDNSService
 from .content import ImageCache, DisplayManager
 from .hardware import get_display_capabilities
 from .utils import ensure_dir, setup_logger
+from .utils.helpers import sanitize_path
 
 
 class MqttDisplayClientManager:
@@ -35,17 +34,14 @@ class MqttDisplayClientManager:
         self.config = Config(args)
 
         # Initialize logging (must be before any logger usage)
-        self.log_dir = ensure_dir(
-            os.path.join(
-                self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"),
-                "logs",
-            )
-        )
+        base_data_dir_raw = self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        base_data_dir = sanitize_path(base_data_dir_raw)
+        self.log_dir = ensure_dir(os.path.join(base_data_dir, "logs"))
         self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO"))
 
         # Set up file system paths
-        data_dir = self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-        self.data_dir = ensure_dir(data_dir)
+        data_dir_raw = self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+        self.data_dir = ensure_dir(sanitize_path(data_dir_raw))
         self.cache_dir = ensure_dir(os.path.join(self.data_dir, "cache"))
         self.state_path = os.path.join(self.data_dir, "mqtt_state.json")
 
@@ -150,7 +146,7 @@ class MqttDisplayClientManager:
 
     async def _display_callback(self, content_path: Path, display_config: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            self.logger.info(f"Displaying content: {content_path}")
+            self.logger.info("Displaying content: %s", content_path)
 
             # Render it
             self.display_manager.display_from_file(str(content_path))
@@ -180,7 +176,7 @@ class MqttDisplayClientManager:
                 self.mqtt_client.presence.set_extra_fields(fields)
                 await self.mqtt_client.presence.publish_status()
             except Exception as e:
-                self.logger.debug(f"Could not republish status with scene_id/subchannel_id: {e}")
+                self.logger.debug("Could not republish status with scene_id/subchannel_id: %s", e)
 
             return {
                 "displayed": True,
@@ -190,7 +186,7 @@ class MqttDisplayClientManager:
             }
 
         except Exception as e:
-            self.logger.error(f"Display callback failed: {e}")
+            self.logger.error("Display callback failed: %s", e)
             self._display_default()
             return {
                 "displayed": False,
@@ -210,17 +206,17 @@ class MqttDisplayClientManager:
                 self.display_manager.display_default_content(default_path)
                 self.logger.info("Displayed built-in default content")
         except Exception as e:
-            self.logger.error(f"Failed to display default content: {e}")
+            self.logger.error("Failed to display default content: %s", e)
 
     def _load_state(self):
         """Load persistent state from disk."""
         if os.path.exists(self.state_path):
             try:
-                with open(self.state_path, "r") as f:
+                with open(self.state_path, encoding="utf-8") as f:
                     self.state = json.load(f)
-                self.logger.debug(f"Loaded state from {self.state_path}")
+                self.logger.debug("Loaded state from %s", self.state_path)
             except Exception as e:
-                self.logger.warning(f"Failed to load state: {e}")
+                self.logger.warning("Failed to load state: %s", e)
                 self.state = {}
         else:
             self.state = {}
@@ -228,11 +224,11 @@ class MqttDisplayClientManager:
     def _save_state(self):
         """Save persistent state to disk."""
         try:
-            with open(self.state_path, "w") as f:
+            with open(self.state_path, "w", encoding="utf-8") as f:
                 json.dump(self.state, f, indent=2)
-            self.logger.debug(f"Saved state to {self.state_path}")
+            self.logger.debug("Saved state to %s", self.state_path)
         except Exception as e:
-            self.logger.error(f"Failed to save state: {e}")
+            self.logger.error("Failed to save state: %s", e)
 
     # def _signal_handler(self, signum, frame):
     #     """Handle shutdown signals."""

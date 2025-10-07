@@ -16,10 +16,10 @@ These utilities are extracted to keep the main display client module
 focused on core display functionality.
 """
 
-import os
-import sys
 import hashlib
 import logging
+import os
+import sys
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urljoin, urlparse
@@ -79,19 +79,42 @@ def env_float(key: str, default: float) -> float:
         return default
 
 
-def ensure_dir(path: str) -> str:
+def sanitize_path(value: str) -> str:
+    """Sanitize a path-like string coming from env/cli.
+
+    Removes inline shell-style comments (# ...) and trims whitespace. This
+    prevents accidental inclusion of documentation fragments inside DATA_DIR
+    or other path variables (e.g. "/opt/app/runstate  # state root").
+
+    Args:
+        value: Raw path string
+
+    Returns:
+        Sanitized path string
     """
-    Ensure a directory exists, creating it if necessary.
-    
+    if not value:
+        return value
+    # Split on '#' and take the left-most segment (common inline comment style)
+    cleaned = value.split('#', 1)[0].strip()
+    # Collapse any internal excessive whitespace
+    cleaned = ' '.join(cleaned.split())
+    return cleaned
+
+
+def ensure_dir(path: str) -> str:
+    """Ensure a directory exists, creating it if necessary.
+
     Args:
         path: Directory path to create
-        
+
     Returns:
         The same path that was passed in
-        
+
     Note:
-        Uses exist_ok=True to avoid errors if directory already exists
+        Uses exist_ok=True to avoid errors if directory already exists.
     """
+    if not path:
+        return path
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -114,6 +137,7 @@ def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
         If the logger is already configured, returns the existing instance
         to avoid duplicate handlers.
     """
+    log_dir = sanitize_path(log_dir)
     ensure_dir(log_dir)
     logger = logging.getLogger("display_client")
     if logger.handlers:
@@ -137,10 +161,15 @@ def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
     ch.setFormatter(fmt)
     logger.addHandler(ch)
     
-    # File handler for persistent logging
-    fh = logging.FileHandler(os.path.join(log_dir, "display_client.log"))
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
+    # File handler for persistent logging; fall back gracefully on permission issues
+    try:
+        fh = logging.FileHandler(os.path.join(log_dir, "display_client.log"))
+    except (OSError, PermissionError) as e:
+        # We keep console logging only.
+        logger.warning("File logging disabled (path=%s): %s", log_dir, e)
+    else:
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
     
     return logger
 
