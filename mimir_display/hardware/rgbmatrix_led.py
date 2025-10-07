@@ -19,6 +19,7 @@ Environment Variables (all optional):
     RGBMATRIX_LIMIT_FPS          Software cap on refresh rate. Default: unset
     RGBMATRIX_PIXEL_MAPPER       Pixel mapper string (e.g. "Rotate:90"). We rely on our own rotation logic; leave unset.
     DISPLAY_ORIENTATION          Re‑used orientation variable (landscape/portrait_left/portrait_right/square)
+    ALLOW_RGBMATRIX_SIM          If set to 1, allow simulation fallback when library missing or init fails. Default: unset (hard fail)
 
 Capabilities strategy:
   * We treat the *logical* resolution as (rows * chain_length * width_per_panel, rows) typical for standard panels
@@ -27,7 +28,7 @@ Capabilities strategy:
   * Orientation is applied virtually using Pillow image rotation before pushing to the hardware.
 
 Error handling:
-    * If the rgbmatrix module or construction fails we mark simulation_mode True and just log what would display.
+    * Missing library or init failure raises by default (no silent simulation). Set ALLOW_RGBMATRIX_SIM=1 to permit simulation.
 
 Root / privilege note:
     * The underlying C++ library usually requires root on Raspberry Pi (sudo) to access GPIO; we warn if not root.
@@ -65,9 +66,17 @@ logger = logging.getLogger(__name__)
 
 try:
     from rgbmatrix import RGBMatrix, RGBMatrixOptions  # type: ignore
-except Exception:  # pragma: no cover - library not installed
-    RGBMatrix = None  # type: ignore
-    RGBMatrixOptions = None  # type: ignore
+except Exception as _lib_err:  # pragma: no cover - library not installed
+    # We do NOT silently simulate unless ALLOW_RGBMATRIX_SIM=1
+    if os.getenv("ALLOW_RGBMATRIX_SIM") == "1":
+        RGBMatrix = None  # type: ignore
+        RGBMatrixOptions = None  # type: ignore
+        logger.warning(
+            "[rgbmatrix] library import failed (%s); proceeding in simulation due to ALLOW_RGBMATRIX_SIM=1",
+            type(_lib_err).__name__,
+        )
+    else:  # Raise hard to let loader fallback or crash (preferred explicit behavior)
+        raise
 
 _matrix: RGBMatrix | None = None  # type: ignore[name-defined]
 _init_error: Exception | None = None
@@ -129,6 +138,7 @@ def _init_matrix() -> None:
         return
     _initialized = True
     if RGBMatrix is None or RGBMatrixOptions is None:
+        # Only allowed if ALLOW_RGBMATRIX_SIM was set earlier; otherwise we would have raised.
         _simulation_mode = True
         return
     # Warn if not root (common library requirement for GPIO access)
@@ -170,8 +180,12 @@ def _init_matrix() -> None:
         )
     except (RuntimeError, OSError, ValueError) as e:  # pragma: no cover - hardware init failure
         _init_error = e
-        _simulation_mode = True
-        logger.warning("[rgbmatrix] init failed -> simulation: %s", e)
+        if os.getenv("ALLOW_RGBMATRIX_SIM") == "1":
+            _simulation_mode = True
+            logger.warning("[rgbmatrix] init failed -> simulation (ALLOW_RGBMATRIX_SIM=1): %s", e)
+        else:
+            # Re-raise so higher layer can choose fallback instead of silently simulating
+            raise
 
 
 def _get_native_resolution() -> tuple[int, int]:
