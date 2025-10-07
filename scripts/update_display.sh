@@ -112,7 +112,7 @@ maybe_sudo_root_target() { # Used for actions affecting INSTALL_DIR when service
 
 # Fix permissions for directories when service runs as root
 if [[ "$SERVICE_USER" == "root" ]]; then
-  info "Ensuring proper root ownership for service directories"
+  info "Ensuring proper root ownership for service data directories"
   if [[ -d "/var/lib/mimir-display" ]]; then
     if [[ $DRY_RUN == 0 ]]; then
       maybe_sudo chown -R root:root /var/lib/mimir-display
@@ -141,16 +141,6 @@ if [[ $NEED_SYNC == 1 ]]; then
   info "Stopping service before sync (if running)"
   if [[ $DRY_RUN == 0 ]]; then maybe_sudo systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true; else echo "DRY_RUN: systemctl stop ${SERVICE_NAME}.service"; fi
   
-  # Fix ownership before attempting any file operations on INSTALL_DIR
-  if [[ "$SERVICE_USER" == "root" && -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REPO_ROOT" ]]; then
-    info "Ensuring install directory ownership for sync operations"
-    if [[ $DRY_RUN == 0 ]]; then
-      maybe_sudo chown -R root:root "$INSTALL_DIR"
-    else
-      echo "DRY_RUN: chown -R root:root $INSTALL_DIR"
-    fi
-  fi
-  
   info "Synchronizing source -> install (rsync)"
   # --- Environment file preservation ---------------------------------------
   # We NEVER want to lose a deployment's live .env by virtue of --delete.
@@ -161,15 +151,7 @@ if [[ $NEED_SYNC == 1 ]]; then
   ENV_PATH="$INSTALL_DIR/.env"
   if [[ -f $ENV_PATH ]]; then
     ts=$(date +%Y%m%d-%H%M%S)
-    # Backup to temp location first, then move with appropriate permissions
-    TEMP_BACKUP="/tmp/.env.backup-$ts"
-    FINAL_BACKUP="$INSTALL_DIR/.env.backup-$ts"
-    if [[ $DRY_RUN == 0 ]]; then 
-      cp "$ENV_PATH" "$TEMP_BACKUP"
-      maybe_sudo_root_target mv "$TEMP_BACKUP" "$FINAL_BACKUP"
-    else 
-      echo "DRY_RUN: cp $ENV_PATH $TEMP_BACKUP && mv $TEMP_BACKUP $FINAL_BACKUP"
-    fi
+    if [[ $DRY_RUN == 0 ]]; then cp "$ENV_PATH" "$INSTALL_DIR/.env.backup-$ts"; else echo "DRY_RUN: cp $ENV_PATH $INSTALL_DIR/.env.backup-$ts"; fi
     info "Backed up existing .env -> .env.backup-$ts"
   fi
   RSYNC_EXCLUDES=(--exclude .venv --exclude .git --exclude __pycache__)
