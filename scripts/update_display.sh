@@ -111,12 +111,24 @@ maybe_sudo_root_target() { # Used for actions affecting INSTALL_DIR when service
   if [[ $SERVICE_USER == root && $EUID_ACTUAL -ne 0 ]]; then sudo "$@"; else "$@"; fi }
 
 # Fix permissions for directories when service runs as root
-if [[ "$SERVICE_USER" == "root" && -d "/var/lib/mimir-display" ]]; then
+if [[ "$SERVICE_USER" == "root" ]]; then
   info "Ensuring proper root ownership for service directories"
-  if [[ $DRY_RUN == 0 ]]; then
-    maybe_sudo chown -R root:root /var/lib/mimir-display
-  else
-    echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
+  if [[ -d "/var/lib/mimir-display" ]]; then
+    if [[ $DRY_RUN == 0 ]]; then
+      maybe_sudo chown -R root:root /var/lib/mimir-display
+    else
+      echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
+    fi
+  fi
+  
+  # Also fix install directory ownership when service runs as root
+  if [[ -d "$INSTALL_DIR" && "$INSTALL_DIR" != "$REPO_ROOT" ]]; then
+    info "Ensuring install directory ownership matches service user"
+    if [[ $DRY_RUN == 0 ]]; then
+      maybe_sudo chown -R root:root "$INSTALL_DIR"
+    else
+      echo "DRY_RUN: chown -R root:root $INSTALL_DIR"
+    fi
   fi
 fi
 
