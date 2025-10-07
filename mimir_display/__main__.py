@@ -1,14 +1,17 @@
 """Entry point for the mimir-display client (discovery mode only)."""
 
-import sys
-import logging
-import signal
-import contextlib
-from pathlib import Path
-import asyncio
 import argparse
-import platform
+import asyncio
+import contextlib
+import json
+import logging
 import os
+import platform
+import signal
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 from .mqtt_client_manager import run_mqtt_discovery_mode
 from .hardware.loader import load_backend
@@ -107,6 +110,9 @@ async def runner():
 def parse_args():
     parser = argparse.ArgumentParser(description="mimir-display entrypoint")
     parser.add_argument('--diagnose-env', action='store_true', help='Print environment diagnostics and exit')
+    parser.add_argument('--health', action='store_true', help='Print JSON health summary and exit (exit codes: 0 ok, 1 degraded, 2 error)')
+    parser.add_argument('--health-server', action='store_true', help='Start lightweight HTTP health server (serves /health)')
+    parser.add_argument('--health-port', type=int, default=8081, help='Port for --health-server (default: 8081)')
     # Allow additional backends (rgbmatrix, hdmi). Use explicit list so --help stays informative.
     parser.add_argument(
         '--backend',
@@ -115,6 +121,86 @@ def parse_args():
         help='Display backend selection (default: auto)'
     )
     return parser.parse_args()
+
+
+def _health_status(caps: dict | None) -> tuple[dict, int]:
+    """Derive health JSON and exit code.
+
+    Returns:
+        (payload, exit_code)
+
+    exit_code semantics:
+        0 -> ok (hardware present, no init_error, not simulation)
+        1 -> degraded (simulation mode OR missing backend info)
+        2 -> error (init_error present)
+    """
+    if caps is None:
+        payload = {"status": "error", "reason": "backend_load_failed"}
+        return payload, 2
+    init_error = caps.get('init_error')
+    simulation = caps.get('simulation_mode')
+    status = 'ok'
+    exit_code = 0
+    reason: list[str] = []
+    if init_error:
+        status = 'error'
+        exit_code = 2
+        reason.append(f"init_error:{init_error}")
+    elif simulation:
+        status = 'degraded'
+        exit_code = 1
+        reason.append('simulation_mode')
+    payload = {
+        'status': status,
+        'backend': caps.get('backend'),
+        'resolution': caps.get('resolution'),
+        'native_resolution': caps.get('native_resolution'),
+        'simulation_mode': simulation,
+        'init_error': init_error,
+        'reasons': reason,
+    }
+    return payload, exit_code
+
+
+def _start_health_http_server(caps_provider, port: int, logger: logging.Logger) -> None:
+    """Start a background HTTP server exposing /health.
+
+    Args:
+        caps_provider: Callable returning current capabilities dict.
+        port: Port number to bind.
+        logger: Logger for informational messages.
+    """
+    class Handler(BaseHTTPRequestHandler):  # type: ignore[misc]
+        def do_GET(self):  # noqa: N802 - framework method name
+            if self.path.split('?')[0] == '/health':
+                try:
+                    caps = caps_provider()
+                except Exception as e:  # pragma: no cover - defensive
+                    caps = None  # type: ignore
+                    logger.warning("Health caps provider failed: %s", e)
+                payload, _ = _health_status(caps)
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, format, *args):  # noqa: D401 - silence default logging
+            return
+
+    try:
+        server = ThreadingHTTPServer(('', port), Handler)
+    except OSError as e:  # pragma: no cover - bind error
+        logger.error("Failed to bind health server on port %s: %s", port, e)
+        return
+
+    thread = threading.Thread(target=server.serve_forever, name='mimir.health', daemon=True)
+    thread.start()
+    logger.info("Health server listening on port %s (GET /health)", port)
 
 
 def main():
@@ -138,9 +224,24 @@ def main():
         explicit = None if args.backend == 'auto' else args.backend
         selected_backend = load_backend(explicit)
         caps = selected_backend.get_display_capabilities()
-        logger.info("Backend selected=%s simulation=%s resolution=%s formats=%s", caps.get('backend', explicit or 'detected'), caps.get('simulation_mode'), caps.get('resolution'), caps.get('supported_formats'))
+        logger.info(
+            "Backend selected=%s simulation=%s resolution=%s formats=%s",
+            caps.get('backend', explicit or 'detected'),
+            caps.get('simulation_mode'), caps.get('resolution'), caps.get('supported_formats')
+        )
     except Exception as e:  # pragma: no cover - defensive
+        caps = None  # type: ignore
         logger.warning("Backend load failed: %s", e)
+
+    # Early health check action
+    if getattr(args, 'health', False):
+        payload, exit_code = _health_status(caps)
+        print(json.dumps(payload, indent=2))
+        sys.exit(exit_code)
+
+    # Optional health server
+    if getattr(args, 'health_server', False):
+        _start_health_http_server(lambda: selected_backend.get_display_capabilities() if selected_backend else None, args.health_port, logger)
 
     try:
         # If there's no running loop, this raises RuntimeError
