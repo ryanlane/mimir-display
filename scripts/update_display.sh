@@ -110,14 +110,60 @@ maybe_sudo() { if [[ $EUID_ACTUAL -ne 0 ]]; then command sudo "$@"; else "$@"; f
 maybe_sudo_root_target() { # Used for actions affecting INSTALL_DIR when service expects root ownership
   if [[ $SERVICE_USER == root && $EUID_ACTUAL -ne 0 ]]; then sudo "$@"; else "$@"; fi }
 
-# Fix permissions for directories when service runs as root
+# Fix permissions for directories based on service user
 if [[ "$SERVICE_USER" == "root" ]]; then
-  info "Ensuring proper root ownership for service data directories"
+  info "Ensuring proper ownership for service data directories (root user)"
+  if [[ -d "/var/lib/mimir-display" ]]; then
+    # Check what user the service is actually running as
+    ACTUAL_SERVICE_PID=$(pgrep -f "python.*mimir_display" || echo "")
+    if [[ -n "$ACTUAL_SERVICE_PID" ]]; then
+      ACTUAL_UID=$(stat -c %u /proc/$ACTUAL_SERVICE_PID 2>/dev/null || echo "")
+      if [[ "$ACTUAL_UID" == "1" ]]; then
+        info "Service actually running as daemon user (UID=1), adjusting permissions accordingly"
+        if [[ $DRY_RUN == 0 ]]; then
+          maybe_sudo chown -R daemon:daemon /var/lib/mimir-display
+        else
+          echo "DRY_RUN: chown -R daemon:daemon /var/lib/mimir-display"
+        fi
+      else
+        info "Service running as root, setting root ownership"
+        if [[ $DRY_RUN == 0 ]]; then
+          maybe_sudo chown -R root:root /var/lib/mimir-display
+        else
+          echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
+        fi
+      fi
+    else
+      # Service not running, default to root
+      if [[ $DRY_RUN == 0 ]]; then
+        maybe_sudo chown -R root:root /var/lib/mimir-display
+      else
+        echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
+      fi
+    fi
+  fi
+elif [[ "$SERVICE_USER" == "mimir" ]]; then
+  info "Ensuring proper ownership for service data directories (mimir user)"
   if [[ -d "/var/lib/mimir-display" ]]; then
     if [[ $DRY_RUN == 0 ]]; then
-      maybe_sudo chown -R root:root /var/lib/mimir-display
+      maybe_sudo chown -R mimir:mimir /var/lib/mimir-display
     else
-      echo "DRY_RUN: chown -R root:root /var/lib/mimir-display"
+      echo "DRY_RUN: chown -R mimir:mimir /var/lib/mimir-display"
+    fi
+  fi
+fi
+
+# Ensure the .env has proper cache directory settings to prevent fallback to install dir
+ENV_FILE="$INSTALL_DIR/.env"
+if [[ -f "$ENV_FILE" ]]; then
+  if ! grep -q "MIMIR_CACHE_DIR" "$ENV_FILE"; then
+    info "Adding MIMIR_CACHE_DIR to .env to prevent fallback to install directory"
+    if [[ $DRY_RUN == 0 ]]; then
+      echo "" >> "$ENV_FILE"
+      echo "# Cache directory (prevents fallback to /opt/mimir-display/cache)" >> "$ENV_FILE"
+      echo "MIMIR_CACHE_DIR=/var/lib/mimir-display/cache" >> "$ENV_FILE"
+    else
+      echo "DRY_RUN: would add MIMIR_CACHE_DIR=/var/lib/mimir-display/cache to .env"
     fi
   fi
 fi
