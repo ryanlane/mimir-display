@@ -115,8 +115,10 @@ def ensure_dir(path: str) -> str:
     """
     if not path:
         return path
-    os.makedirs(path, exist_ok=True)
-    return path
+    # Defense in depth: sanitize here too, in case callers forgot.
+    cleaned = sanitize_path(path)
+    os.makedirs(cleaned, exist_ok=True)
+    return cleaned
 
 
 def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
