@@ -253,6 +253,13 @@ def main():
         except KeyboardInterrupt:
             logger.info("Interrupted")
             sys.exit(130)
+        except RuntimeError as e:  # pragma: no cover - defensive
+            # On some Python versions a late signal during startup can surface
+            # as a 'no running event loop' error while shutting down. Treat as clean exit.
+            if 'no running event loop' in str(e).lower():
+                logger.debug("Suppressed benign shutdown RuntimeError: %s", e)
+                sys.exit(0)
+            raise
         else:
             sys.exit(0)
     else:

@@ -19,7 +19,8 @@ from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService
 from .content import ImageCache, DisplayManager
 from .hardware import get_display_capabilities
-from .utils import ensure_dir, setup_logger
+from .utils import setup_logger
+from .utils.helpers import resolve_writable_dir
 from .utils.helpers import sanitize_path
 
 
@@ -35,14 +36,19 @@ class MqttDisplayClientManager:
 
         # Initialize logging (must be before any logger usage)
         base_data_dir_raw = self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-        base_data_dir = sanitize_path(base_data_dir_raw)
-        self.log_dir = ensure_dir(os.path.join(base_data_dir, "logs"))
+        base_data_dir_sanitized = sanitize_path(base_data_dir_raw)
+        try:
+            base_data_dir = resolve_writable_dir(base_data_dir_sanitized, "data_dir")
+        except Exception:
+            # Fall back to last-resort chain inside resolver with explicit None
+            base_data_dir = resolve_writable_dir(None, "data_dir")
+        self.log_dir = resolve_writable_dir(base_data_dir, "logs", subdir="logs")
         self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO"))
 
         # Set up file system paths
-        data_dir_raw = self.config.get("data_dir") or os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-        self.data_dir = ensure_dir(sanitize_path(data_dir_raw))
-        self.cache_dir = ensure_dir(os.path.join(self.data_dir, "cache"))
+        data_dir_raw = self.config.get("data_dir") or base_data_dir
+        self.data_dir = resolve_writable_dir(sanitize_path(data_dir_raw), "data_dir")
+        self.cache_dir = resolve_writable_dir(self.data_dir, "cache", subdir="cache")
         self.state_path = os.path.join(self.data_dir, "mqtt_state.json")
 
         # Normalize device id to hostname slug (always) to ensure topic stability

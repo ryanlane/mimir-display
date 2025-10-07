@@ -117,6 +117,9 @@ def ensure_dir(path: str) -> str:
         return path
     # Defense in depth: sanitize here too, in case callers forgot.
     cleaned = sanitize_path(path)
+    # Basic validation: reject obviously bad accidental values like lone parentheses or commas
+    if len(cleaned) <= 2 and cleaned in {"(", ")", "{}", "[]", "<>", "''", '""', ","}:
+        raise ValueError(f"Suspicious directory path '{cleaned}' (sanitized from '{path}')")
     try:
         os.makedirs(cleaned, exist_ok=True)
         return cleaned
@@ -137,6 +140,58 @@ def ensure_dir(path: str) -> str:
                 )
                 return fallback
         raise
+
+
+def resolve_writable_dir(preferred: str | None, purpose: str, subdir: str | None = None) -> str:
+    """Choose and create a writable directory for a given purpose.
+
+    Resolution chain (first that can be created/written wins):
+        1. Explicit preferred path (DATA_DIR or caller provided)
+        2. $XDG_DATA_HOME/mimir-display
+        3. ~/.local/share/mimir-display
+        4. /var/lib/mimir-display (often pre-created for system installs)
+        5. /tmp/mimir-display
+
+    Args:
+        preferred: User supplied base directory (may be None/empty)
+        purpose: Short label used only for warning messages
+        subdir: Optional child directory to append (e.g. "logs", "cache")
+
+    Returns:
+        Absolute path to a writable directory (created if needed)
+
+    Raises:
+        RuntimeError if no candidate path could be created.
+    """
+    candidates: list[str] = []
+    if preferred:
+        try:
+            cand = sanitize_path(preferred)
+            if cand:
+                candidates.append(cand)
+        except Exception:
+            pass
+    xdg = os.getenv("XDG_DATA_HOME")
+    if xdg:
+        candidates.append(os.path.join(xdg, "mimir-display"))
+    home = os.path.expanduser("~")
+    if home and home != "~":  # ensure expansion worked
+        candidates.append(os.path.join(home, ".local", "share", "mimir-display"))
+    # System-level typical location (might not be writable as non-root, that's fine)
+    candidates.append("/var/lib/mimir-display")
+    # Last resort
+    candidates.append("/tmp/mimir-display")
+
+    tried: list[str] = []
+    for base in candidates:
+        target = os.path.join(base, subdir) if subdir else base
+        try:
+            ensured = ensure_dir(target)
+            return ensured
+        except Exception as e:  # pragma: no cover - best effort path selection
+            tried.append(f"{target} -> {type(e).__name__}")
+            continue
+    raise RuntimeError(f"Unable to establish writable directory for {purpose}; attempted: {tried}")
 
 
 def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
