@@ -144,7 +144,7 @@ def ensure_dir(path: str) -> str:
         raise
 
 
-def resolve_writable_dir(preferred: str | None, purpose: str, subdir: str | None = None) -> str:
+def resolve_writable_dir(preferred: Optional[str], purpose: str, subdir: Optional[str] = None) -> str:
     """Choose and create a writable directory for a given purpose.
 
     Resolution chain (first that can be created/written wins):
