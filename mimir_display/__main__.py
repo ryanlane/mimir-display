@@ -1,4 +1,5 @@
 """Entry point for the mimir-display client (discovery mode only)."""
+from __future__ import annotations
 
 import argparse
 import asyncio

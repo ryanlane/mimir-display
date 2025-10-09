@@ -16,6 +16,8 @@ These utilities are extracted to keep the main display client module
 focused on core display functionality.
 """
 
+from __future__ import annotations
+
 import hashlib
 import logging
 import os
