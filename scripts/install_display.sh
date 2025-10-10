@@ -73,6 +73,47 @@ fi
 BACKEND="${OPTIONS[$((CHOICE-1))]}"
 echo "[+] Selected backend: $BACKEND" >&2
 
+# Helper: read a key from an env file (simple KEY=VALUE parsing, ignoring comments)
+read_env_value() {
+  local file="$1" key="$2"
+  if [[ -f "$file" ]]; then
+    # shellcheck disable=SC2002
+    awk -F'=' -v k="$key" 'BEGIN{IGNORECASE=0} $0 !~ /^\s*#/ && $1==k {sub(/^\s+|\s+$/, "", $2); print $2; exit}' "$file"
+  fi
+}
+
+# Helper: set or append KEY=VALUE in an env file
+set_env_value() {
+  local file="$1" key="$2" value="$3"
+  if [[ ! -f "$file" ]]; then
+    printf '%s=%s\n' "$key" "$value" >"$file"
+    return
+  fi
+  if grep -q "^${key}=" "$file"; then
+    sed -i "s#^${key}=.*#${key}=${value}#" "$file"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file"
+  fi
+}
+
+# Helper: copy the best sample .env for the selected backend
+copy_sample_env() {
+  local backend="$1" dest="$2" root_dir="$3"
+  local sample=""
+  case "$backend" in
+    hyperpixelsq) sample=".env.example.hyperpixelsq" ;;
+    rgbmatrix)    sample=".env.example.rgbmatrix" ;;
+    *)            sample=".env.example" ;;
+  esac
+  if [[ -f "$root_dir/$sample" ]]; then
+    cp "$root_dir/$sample" "$dest"
+    echo "[+] Seeded $dest from $sample" >&2
+  else
+    : >"$dest"
+    echo "[warn] Sample $sample not found; created empty $dest" >&2
+  fi
+}
+
 # Determine extra early (needed for armv6 numpy logic below)
 EXTRA=""
 case "$BACKEND" in
@@ -82,6 +123,8 @@ case "$BACKEND" in
   hdmi) EXTRA="[hdmi]" ;;
   auto) EXTRA="[all]" ;;
 esac
+EXTRA_NAME="${EXTRA#\[}"
+EXTRA_NAME="${EXTRA_NAME%]}"
 
 SCRIPT_PATH="$0"
 # When invoked via 'bash scripts/install_display.sh' $0 may be 'scripts/install_display.sh' or relative path.
@@ -193,39 +236,120 @@ if [[ ! -f "pyproject.toml" ]]; then
   exit 1
 fi
 
-if [[ $MODE_CHOICE == 1 ]]; then
-  echo "[+] Editable install: pip install -e .${EXTRA}" >&2
-  pip install -e ".$EXTRA"
-else
-  echo "[+] Standard install from copied tree .${EXTRA}" >&2
-  pip install ".$EXTRA"
+# ------------------------------------------------------------
+# Dependency presence check from pyproject.toml
+# ------------------------------------------------------------
+REQ_LIST=$(python3 - "$EXTRA_NAME" <<'PY' 2>/dev/null || true
+import os, sys
+extra = (sys.argv[1] or '').strip()
+try:
+    try:
+        import tomllib as toml
+    except ModuleNotFoundError:
+        import tomli as toml  # type: ignore
+except Exception:
+    print("")
+    raise SystemExit(0)
+try:
+    with open('pyproject.toml','rb') as f:
+        data = toml.load(f)
+except Exception:
+    print("")
+    raise SystemExit(0)
+proj = data.get('project', {})
+deps = list(proj.get('dependencies', []) or [])
+opt = proj.get('optional-dependencies', {}) or {}
+if extra:
+    if extra == 'all':
+        for arr in opt.values():
+            deps.extend(arr or [])
+    else:
+        deps.extend(opt.get(extra, []) or [])
+for d in deps:
+    if isinstance(d, str) and d.strip():
+        print(d.strip())
+PY
+)
+
+missing_pkgs=()
+total_pkgs=0
+if [[ -n "$REQ_LIST" ]]; then
+  while IFS= read -r req; do
+    # Extract distribution name left of version markers/semicolons/extras
+    name=$(printf '%s' "$req" | awk -F'[<>=; ]' '{print $1}' | sed 's/\[.*\]//')
+    # Skip python-specifier pseudo-reqs
+    if [[ "$name" == python || -z "$name" ]]; then continue; fi
+    ((total_pkgs++))
+    if ! pip show "$name" >/dev/null 2>&1; then
+      missing_pkgs+=("$name")
+    fi
+  done <<< "$REQ_LIST"
 fi
 
+SKIP_INSTALL=0
+if (( total_pkgs > 0 )) && (( ${#missing_pkgs[@]} == 0 )); then
+  read -rp "All $total_pkgs dependencies already present for extra '$EXTRA_NAME'. Skip installing libraries? (Y/n): " SKIP_ANS || true
+  SKIP_ANS=${SKIP_ANS:-Y}
+  if [[ ${SKIP_ANS,,} != n* ]]; then
+    SKIP_INSTALL=1
+    echo "[info] Skipping pip install per user choice." >&2
+  fi
+elif (( ${#missing_pkgs[@]} > 0 )); then
+  echo "[info] Missing ${#missing_pkgs[@]}/$total_pkgs packages: ${missing_pkgs[*]}" >&2
+fi
+
+if (( SKIP_INSTALL == 0 )); then
+  if [[ $MODE_CHOICE == 1 ]]; then
+    echo "[+] Editable install: pip install -e .${EXTRA}" >&2
+    pip install -e ".${EXTRA}"
+  else
+    echo "[+] Standard install from copied tree .${EXTRA}" >&2
+    pip install ".${EXTRA}"
+  fi
+else
+  echo "[+] Using existing environment without additional installs." >&2
+fi
+
+# ----------------------------------------------
+# Environment file creation and customization
+# ----------------------------------------------
 ENV_FILE=".env"
-if [[ -f $ENV_FILE ]]; then
-  echo "[info] Existing .env found; will append DISPLAY_BACKEND key if absent"
+if [[ -f "$ENV_FILE" ]]; then
+  echo "[info] Existing .env found; will update key settings (backend, orientation, URLs)." >&2
 else
-  echo "[+] Creating .env"
-  touch $ENV_FILE
+  echo "[+] Creating .env from sample for backend: $BACKEND" >&2
+  copy_sample_env "$BACKEND" "$ENV_FILE" "$INSTALL_DIR"
 fi
-grep -q '^DISPLAY_BACKEND=' .env || echo "DISPLAY_BACKEND=${BACKEND}" >> .env
-grep -q '^LOG_LEVEL=' .env || echo "LOG_LEVEL=INFO" >> .env
 
-# ----------------------------------------------
-# Orientation prompt (new)
-# ----------------------------------------------
+# Ensure DISPLAY_BACKEND and LOG_LEVEL are set
+set_env_value "$ENV_FILE" "DISPLAY_BACKEND" "$BACKEND"
+if ! grep -q '^LOG_LEVEL=' "$ENV_FILE"; then
+  echo "LOG_LEVEL=INFO" >>"$ENV_FILE"
+fi
+
+# Prompt for Platform URL with current value as default
+CUR_PLATFORM_URL="$(read_env_value "$ENV_FILE" "PLATFORM_URL")"
+CUR_PLATFORM_URL=${CUR_PLATFORM_URL:-http://localhost:5000}
+read -rp "Platform URL [${CUR_PLATFORM_URL}]: " INPUT_PLATFORM_URL || true
+INPUT_PLATFORM_URL=${INPUT_PLATFORM_URL:-$CUR_PLATFORM_URL}
+set_env_value "$ENV_FILE" "PLATFORM_URL" "$INPUT_PLATFORM_URL"
+
+# Prompt for MQTT broker host
+CUR_MQTT_HOST="$(read_env_value "$ENV_FILE" "MQTT_BROKER_HOST")"
+CUR_MQTT_HOST=${CUR_MQTT_HOST:-localhost}
+read -rp "MQTT broker host [${CUR_MQTT_HOST}]: " INPUT_MQTT_HOST || true
+INPUT_MQTT_HOST=${INPUT_MQTT_HOST:-$CUR_MQTT_HOST}
+set_env_value "$ENV_FILE" "MQTT_BROKER_HOST" "$INPUT_MQTT_HOST"
+
+# Orientation prompt
 read -rp "Display orientation (landscape|portrait_left|portrait_right) [landscape]: " ORIENTATION_INPUT || true
 ORIENTATION_INPUT=${ORIENTATION_INPUT:-landscape}
 case "$ORIENTATION_INPUT" in
-  landscape|portrait_left|portrait_right) : ;; 
+  landscape|portrait_left|portrait_right) : ;;
   *) echo "[warn] Invalid orientation '$ORIENTATION_INPUT'; defaulting to landscape" >&2; ORIENTATION_INPUT=landscape ;;
 esac
-if grep -q '^DISPLAY_ORIENTATION=' .env; then
-  sed -i "s/^DISPLAY_ORIENTATION=.*/DISPLAY_ORIENTATION=${ORIENTATION_INPUT}/" .env
-else
-  echo "DISPLAY_ORIENTATION=${ORIENTATION_INPUT}" >> .env
-fi
-echo "[+] Orientation set to ${ORIENTATION_INPUT} (rotate content automatically)" >&2
+set_env_value "$ENV_FILE" "DISPLAY_ORIENTATION" "$ORIENTATION_INPUT"
+echo "[+] .env configured: DISPLAY_BACKEND=$BACKEND, PLATFORM_URL=$INPUT_PLATFORM_URL, MQTT_BROKER_HOST=$INPUT_MQTT_HOST, DISPLAY_ORIENTATION=$ORIENTATION_INPUT" >&2
 
 if [[ $BACKEND == "hyperpixelsq" ]]; then
   # Attempt to detect Raspberry Pi boot config location (varies between distros)
@@ -287,3 +411,4 @@ fi
 
 echo "=== Install complete ==="
 echo "Activate with: source $INSTALL_DIR/.venv/bin/activate && mimir-display --backend $BACKEND"
+echo "Environment file: $INSTALL_DIR/.env"
