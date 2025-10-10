@@ -291,7 +291,7 @@ if [[ -n "$REQ_LIST" ]]; then
     name=$(printf '%s' "$req" | awk -F'[<>=; ]' '{print $1}' | sed 's/\[.*\]//')
     # Skip python-specifier pseudo-reqs
     if [[ "$name" == python || -z "$name" ]]; then continue; fi
-    ((total_pkgs++))
+  total_pkgs=$(( total_pkgs + 1 ))
     if ! pip show "$name" >/dev/null 2>&1; then
       missing_pkgs+=("$name")
     fi
