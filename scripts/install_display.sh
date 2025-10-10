@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+shopt -s lastpipe
+
+# Professional installer: show clear failure location
+trap 'rc=$?; echo "[error] Install failed at line $LINENO while running: $BASH_COMMAND (exit=$rc)" >&2; exit $rc' ERR
+
+# Small helpers for UX
+step() { echo; echo "==> $*"; }
+require_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "[error] Required command '$1' not found. Please install it and re-run." >&2; exit 1; }; }
 
 echo "=== Mimir Unified Display Installer (Interactive) ==="
 
@@ -166,6 +174,7 @@ else
     fi
   fi
   echo "[+] Will perform a copy/deploy install to $INSTALL_DIR" >&2
+  require_cmd rsync
   RSYNC_CMD=(rsync -a --delete --exclude '.venv' --exclude '.git')
   if [[ -w $INSTALL_DIR ]]; then
     "${RSYNC_CMD[@]}" "$PROJECT_ROOT/" "$INSTALL_DIR/"
@@ -183,6 +192,7 @@ else
 fi
 
 cd "$INSTALL_DIR"
+step "Using install directory: $INSTALL_DIR"
 
 # ------------------------------------------------------------
 # Platform / architecture helpers (for Pi Zero W armv6 issues)
@@ -220,7 +230,7 @@ if [[ $ARCH == armv6l ]]; then
 fi
 
 if [[ ! -d .venv ]]; then
-  echo "[+] Creating virtualenv (.venv)" >&2
+  step "Creating virtualenv (.venv)"
   if [[ $USE_SYSTEM_NUMPY == 1 ]]; then
     python3 -m venv --system-site-packages .venv
   else
@@ -228,6 +238,7 @@ if [[ ! -d .venv ]]; then
   fi
 fi
 source .venv/bin/activate
+step "Upgrading build tools (pip/setuptools/wheel)"
 pip install --upgrade pip setuptools wheel
 
 
@@ -239,6 +250,7 @@ fi
 # ------------------------------------------------------------
 # Dependency presence check from pyproject.toml
 # ------------------------------------------------------------
+step "Checking Python dependencies for extra '$EXTRA_NAME'"
 REQ_LIST=$(python3 - "$EXTRA_NAME" <<'PY' 2>/dev/null || true
 import os, sys
 extra = (sys.argv[1] or '').strip()
@@ -296,9 +308,16 @@ if (( total_pkgs > 0 )) && (( ${#missing_pkgs[@]} == 0 )); then
   fi
 elif (( ${#missing_pkgs[@]} > 0 )); then
   echo "[info] Missing ${#missing_pkgs[@]}/$total_pkgs packages: ${missing_pkgs[*]}" >&2
+else
+  echo "[info] No dependencies parsed from pyproject.toml; proceeding with install to be safe." >&2
 fi
 
 if (( SKIP_INSTALL == 0 )); then
+  if [[ $MODE_CHOICE == 1 ]]; then
+    step "Installing project packages (editable mode)"
+  else
+    step "Installing project packages (standard mode)"
+  fi
   if [[ $MODE_CHOICE == 1 ]]; then
     echo "[+] Editable install: pip install -e .${EXTRA}" >&2
     pip install -e ".${EXTRA}"
@@ -313,6 +332,7 @@ fi
 # ----------------------------------------------
 # Environment file creation and customization
 # ----------------------------------------------
+step "Configuring environment (.env)"
 ENV_FILE=".env"
 if [[ -f "$ENV_FILE" ]]; then
   echo "[info] Existing .env found; will update key settings (backend, orientation, URLs)." >&2
@@ -383,6 +403,7 @@ fi
 
 read -rp "Create systemd service? (y/N): " MAKE_SVC
 if [[ ${MAKE_SVC,,} == y* ]]; then
+  step "Creating systemd service"
   SERVICE_PATH="/etc/systemd/system/mimir-display.service"
   echo "[+] Writing $SERVICE_PATH"
   cat <<SERVICE | sudo tee "$SERVICE_PATH" >/dev/null
@@ -409,6 +430,9 @@ SERVICE
   echo "[+] Service installed. Start with: sudo systemctl start mimir-display"
 fi
 
+echo
 echo "=== Install complete ==="
-echo "Activate with: source $INSTALL_DIR/.venv/bin/activate && mimir-display --backend $BACKEND"
 echo "Environment file: $INSTALL_DIR/.env"
+echo "Activate venv:   source $INSTALL_DIR/.venv/bin/activate"
+echo "Run client:      mimir-display --backend $BACKEND"
+echo "Service:         sudo systemctl start mimir-display (if created)"
