@@ -5,15 +5,17 @@ Handles downloading content from URLs with SHA256 validation and caching.
 Supports the URL-based approach recommended in the migration plan.
 """
 
+import asyncio
 import hashlib
 import logging
-import aiohttp
-import asyncio
 import os
 import socket
-from pathlib import Path
-from typing import Dict, Any, Optional
+import time
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import aiohttp
 
 
 class ContentDownloader:
@@ -88,6 +90,38 @@ class ContentDownloader:
         else:
             # Fallback to content ID
             return self.cache_dir / content_id
+
+    def _cleanup_stale_temps(self, max_age_seconds: int = 3600) -> int:
+        """Remove stale temporary files from the cache directory.
+
+        Targets artifacts that can remain after crashes or power loss:
+        - files ending with '.tmp'
+        - files starting with 'tmp_'
+
+        Returns number of files removed.
+        """
+        removed = 0
+        try:
+            now = time.time()
+            for p in self.cache_dir.iterdir():
+                try:
+                    if not p.is_file():
+                        continue
+                    name = p.name
+                    if not (name.endswith('.tmp') or name.startswith('tmp_')):
+                        continue
+                    age = now - p.stat().st_mtime
+                    if age >= max_age_seconds:
+                        p.unlink(missing_ok=True)
+                        removed += 1
+                except Exception:
+                    # best effort; continue
+                    continue
+        except Exception:
+            return removed
+        if removed:
+            self.logger.info(f"Removed {removed} stale temp files from cache")
+        return removed
         
     def _normalize_delivery(self, assignment: dict) -> dict:
         """Return a canonical {'type':'url','url':..., 'content_type':...} or raise KeyError('url')."""
@@ -109,11 +143,11 @@ class ContentDownloader:
         if "image_url" in a:
             return {"type": "url", "url": a["image_url"], "content_type": a.get("content_type")}
 
-        raise KeyError("url")        
+    raise KeyError("url")
     
     async def download_with_cache(
-        self, 
-        url: str, 
+        self,
+        url: str,
         content_id: str,
         expected_sha: str = None,
         force_download: bool = False
@@ -135,6 +169,12 @@ class ContentDownloader:
             aiohttp.ClientError: If download fails
         """
         cache_path = self._get_cache_path(content_id, expected_sha)
+
+        # Opportunistic cleanup of stale temp files (non-blocking best-effort)
+        try:
+            self._cleanup_stale_temps(max_age_seconds=1800)
+        except Exception:
+            pass
         
         # Check if file exists in cache and is valid
         if not force_download and cache_path.exists():
@@ -199,6 +239,11 @@ class ContentDownloader:
             duration = (datetime.now() - start_time).total_seconds()
             file_size = cache_path.stat().st_size
             self.logger.info(f"Downloaded {content_id}: {file_size} bytes in {duration:.2f}s")
+            # After successful download, optionally prune temp artifacts
+            try:
+                self._cleanup_stale_temps(max_age_seconds=600)
+            except Exception:
+                pass
             
             return cache_path
             
@@ -382,6 +427,12 @@ class AssignmentProcessor:
                     self.logger.error(f"Display callback failed for {assignment_id}: {e}")
                     result["display_error"] = str(e)
             
+            # Enforce small cache footprint: keep only last/current/next (3 most recent)
+            try:
+                self.downloader.clear_cache(keep_recent=3)
+            except Exception as e:
+                self.logger.debug("Cache retention sweep failed: %s", e)
+
             self.logger.info("Assignment %s processed successfully", assignment_id)
             return result
             

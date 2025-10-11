@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Tuple
+from typing import Any
 from PIL import Image, ImageOps  # type: ignore
 
 # Unified hardware abstraction (selects correct backend automatically)
-from mimir_display.hardware import display_image as hw_display_image, HARDWARE_AVAILABLE, get_display_capabilities
+from mimir_display.hardware import HARDWARE_AVAILABLE, display_image as hw_display_image
 
 
 class DisplayManager:
@@ -21,7 +21,7 @@ class DisplayManager:
     device resolution/orientation, and pushes it to the hardware backend.
     """
     
-    def __init__(self, capabilities: Dict[str, Any], cache_dir: str, logger):
+    def __init__(self, capabilities: dict[str, Any], cache_dir: str, logger):
         self.capabilities = capabilities or {}
         self.cache_dir = cache_dir
         self.logger = logger
@@ -72,7 +72,17 @@ class DisplayManager:
                 img = self._fit_image(img, self.hw_w, self.hw_h)
 
         # 4) Send to hardware
-        self._hw_display_image(img)        
+        self._hw_display_image(img)
+
+        # Mark the source file as most-recent to protect it during pruning
+        try:
+            if str(path).startswith(self.cache_dir) and os.path.isfile(path):
+                os.utime(path, None)
+        except Exception:
+            pass
+
+        # Enforce retention each time we display
+        self._enforce_cache_retention(keep=3)
     
     def resize_for_display(self, img: Image.Image) -> Image.Image:
         """
@@ -123,8 +133,8 @@ class DisplayManager:
             img = self.resize_for_display(img)
             img.save(temp_path)
             
-            self.logger.debug("Processed image: %dx%d -> %dx%d", 
-                             img.size[0], img.size[1], *self._target_resolution())
+            self.logger.debug("Processed image: %dx%d -> %dx%d",
+                              img.size[0], img.size[1], *self._target_resolution())
             return temp_path
             
         except Exception as e:
@@ -156,7 +166,19 @@ class DisplayManager:
             data: Raw image data to process and display
         """
         processed_path = self.process_image_data(data)
-        self.display_image(processed_path)
+        try:
+            self.display_image(processed_path)
+        finally:
+            # Best-effort cleanup of processed temp file
+            try:
+                if os.path.exists(processed_path):
+                    os.remove(processed_path)
+            except Exception:
+                pass
+            # Opportunistic sweep of stale temp artifacts in cache dir
+            self._cleanup_cache_temps()
+            # Enforce retention after each update
+            self._enforce_cache_retention(keep=3)
     
     def display_default_content(self, default_path: str):
         """
@@ -169,23 +191,34 @@ class DisplayManager:
             self.logger.info("No default content to display")
             return
         
+        temp_path = None
         try:
             self.logger.info("Displaying default content: %s", default_path)
-            
+
             # Process default content to fit display
             img = Image.open(default_path)
             img = self.resize_for_display(img)
-            
+
             temp_path = os.path.join(self.cache_dir, "default_resized.png")
             img.save(temp_path)
-            
+
             self.display_image(temp_path)
-            
+
         except Exception as e:
             self.logger.warning("Failed to display default content: %s", e)
+        finally:
+            # Cleanup processed default image
+            if temp_path:
+                try:
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                except Exception:
+                    pass
+            self._cleanup_cache_temps()
+            self._enforce_cache_retention(keep=3)
 
     # ---- Helpers ----
-    def _target_resolution(self) -> Tuple[int, int]:
+    def _target_resolution(self) -> tuple[int, int]:
         """Return logical target resolution that upstream (platform) expects.
 
         For portrait orientations this is the swapped version already provided
@@ -195,7 +228,7 @@ class DisplayManager:
 
     # Backwards compatibility for older code expecting .resolution attribute
     @property
-    def resolution(self) -> Tuple[int, int]:  # pragma: no cover - simple passthrough
+    def resolution(self) -> tuple[int, int]:  # pragma: no cover - simple passthrough
         return self._target_resolution()
     
     def _fit_image(self, img: Image.Image, target_w: int, target_h: int) -> Image.Image:
@@ -207,6 +240,7 @@ class DisplayManager:
             img = ImageOps.exif_transpose(img)
         except Exception:
             pass
+
 
         # Compute scale while preserving aspect ratio
         img_ratio = img.width / img.height
@@ -238,10 +272,80 @@ class DisplayManager:
         capabilities, but this keeps things simple and consistent now.
         """
         from tempfile import NamedTemporaryFile
+        tmp_path = None
         try:
-            with NamedTemporaryFile(delete=False, suffix=".png") as f:
+            # Create temp file in cache_dir so our cleanup policy covers it
+            with NamedTemporaryFile(delete=False, suffix=".png", dir=self.cache_dir) as f:
                 img.save(f.name, format="PNG")
                 tmp_path = f.name
             self.display_image(tmp_path)
         except Exception as e:  # noqa: BLE001
             self.logger.error("Hardware display failed: %s", e)
+        finally:
+            # Always attempt to remove the temp file we created for hardware handoff
+            if tmp_path:
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+            # Also sweep other stale temp artifacts occasionally
+            self._cleanup_cache_temps()
+
+    def _cleanup_cache_temps(self, max_age_seconds: int = 600) -> None:
+        """Remove stray temp artifacts in cache_dir older than max_age_seconds.
+
+        Targets patterns left behind by crashes or abrupt restarts:
+        - files ending with '.tmp'
+        - files starting with 'tmp_'
+        - legacy fixed temp names like 'tmp_display.png'/'default_resized.png' if stale
+        """
+        try:
+            now = __import__("time").time()
+            for name in os.listdir(self.cache_dir):
+                if not (name.endswith(".tmp") or name.startswith("tmp_") or name in {"tmp_display.png", "default_resized.png"}):
+                    continue
+                path = os.path.join(self.cache_dir, name)
+                try:
+                    if not os.path.isfile(path):
+                        continue
+                    age = now - os.path.getmtime(path)
+                    if age >= max_age_seconds:
+                        os.remove(path)
+                except Exception:
+                    # Best-effort cleanup; ignore individual failures
+                    pass
+        except Exception:
+            pass
+
+    def _enforce_cache_retention(self, keep: int = 3) -> None:
+        """Keep only the most recent 'keep' non-temp files in cache_dir.
+
+        Non-temp means: not ending with '.tmp' and not starting with 'tmp_'. This
+        targets our content cache regardless of file extension or lack thereof.
+        """
+        try:
+            entries = []
+            for name in os.listdir(self.cache_dir):
+                if name.endswith('.tmp') or name.startswith('tmp_'):
+                    continue
+                path = os.path.join(self.cache_dir, name)
+                if not os.path.isfile(path):
+                    continue
+                try:
+                    mtime = os.path.getmtime(path)
+                except Exception:
+                    continue
+                entries.append((mtime, path))
+
+            # Newest first
+            entries.sort(key=lambda t: t[0], reverse=True)
+            for _mtime, path in entries[keep:]:
+                try:
+                    os.remove(path)
+                except Exception:
+                    # ignore individual failures
+                    pass
+        except Exception:
+            # best effort; ignore top-level failures
+            pass
