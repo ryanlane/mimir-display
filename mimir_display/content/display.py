@@ -26,6 +26,17 @@ class DisplayManager:
         self.cache_dir = cache_dir
         self.logger = logger
 
+        # Ensure any temp files created by libraries land in our cache_dir
+        # so our retention/cleanup policies apply and /tmp does not grow.
+        try:
+            import tempfile
+            tempfile.tempdir = self.cache_dir  # override module-level temp dir
+            os.environ.setdefault("TMPDIR", self.cache_dir)
+            os.environ.setdefault("TEMP", self.cache_dir)
+            os.environ.setdefault("TMP", self.cache_dir)
+        except Exception:
+            pass
+
         # Capabilities: {"resolution": [w, h], "orientation": "landscape|portrait|square", ...}
         # Logical (possibly swapped) resolution for upstream
         res = self.capabilities.get("resolution") or self.capabilities.get("size")
@@ -83,6 +94,8 @@ class DisplayManager:
 
         # Enforce retention each time we display
         self._enforce_cache_retention(keep=3)
+        # Best-effort global tmp PNG cleanup (protects against library tmp in /tmp)
+        self._cleanup_system_tmp_pngs()
     
     def resize_for_display(self, img: Image.Image) -> Image.Image:
         """
@@ -179,6 +192,7 @@ class DisplayManager:
             self._cleanup_cache_temps()
             # Enforce retention after each update
             self._enforce_cache_retention(keep=3)
+            self._cleanup_system_tmp_pngs()
     
     def display_default_content(self, default_path: str):
         """
@@ -216,6 +230,7 @@ class DisplayManager:
                     pass
             self._cleanup_cache_temps()
             self._enforce_cache_retention(keep=3)
+            self._cleanup_system_tmp_pngs()
 
     # ---- Helpers ----
     def _target_resolution(self) -> tuple[int, int]:
@@ -291,6 +306,8 @@ class DisplayManager:
                     pass
             # Also sweep other stale temp artifacts occasionally
             self._cleanup_cache_temps()
+            # And clean system tmp *.png safety valve
+            self._cleanup_system_tmp_pngs()
 
     def _cleanup_cache_temps(self, max_age_seconds: int = 600) -> None:
         """Remove stray temp artifacts in cache_dir older than max_age_seconds.
@@ -348,4 +365,29 @@ class DisplayManager:
                     pass
         except Exception:
             # best effort; ignore top-level failures
+            pass
+
+    def _cleanup_system_tmp_pngs(self, max_age_seconds: int = 600) -> None:
+        """Remove stale tmp*.png files in /tmp to prevent unbounded growth.
+
+        This is a safety valve in case lower layers or libraries create temporary
+        PNGs outside our cache_dir. We only delete files matching 'tmp*.png' that
+        are older than max_age_seconds.
+        """
+        try:
+            tmpdir = "/tmp"
+            now = __import__("time").time()
+            for name in os.listdir(tmpdir):
+                if not (name.endswith(".png") and name.startswith("tmp")):
+                    continue
+                path = os.path.join(tmpdir, name)
+                try:
+                    if not os.path.isfile(path):
+                        continue
+                    age = now - os.path.getmtime(path)
+                    if age >= max_age_seconds:
+                        os.remove(path)
+                except Exception:
+                    pass
+        except Exception:
             pass
