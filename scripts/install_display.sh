@@ -41,8 +41,41 @@ warn() { printf "\033[1;33m[warn]\033[0m %s\n" "$*"; }
 err()  { printf "\033[1;31m[err]\033[0m  %s\n" "$*"; }
 
 in_git_root() {
-  # cd to the directory containing this script (project root assumed)
-  cd -- "$(dirname "$0")"
+  # Change to the repository root. Prefer the parent of this script's folder (../)
+  # and fall back to git root or walking up until a Python project file is found.
+  local script_dir
+  script_dir="$(cd -- "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
+
+  # First try: parent of the scripts directory (expected project root)
+  local parent_dir
+  parent_dir="$(dirname "${script_dir}")"
+  if [[ -f "${parent_dir}/pyproject.toml" || -f "${parent_dir}/setup.py" ]]; then
+    cd -- "${parent_dir}"
+    return
+  fi
+
+  # Second try: git repository root if available
+  if have_cmd git; then
+    local git_root
+    git_root="$(git -C "${script_dir}" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "${git_root}" ]]; then
+      cd -- "${git_root}"
+      return
+    fi
+  fi
+
+  # Last resort: walk up a few levels looking for a Python project file
+  local dir="${script_dir}"
+  for _ in 1 2 3 4; do
+    if [[ -f "${dir}/pyproject.toml" || -f "${dir}/setup.py" ]]; then
+      cd -- "${dir}"
+      return
+    fi
+    dir="$(dirname "${dir}")"
+  done
+
+  # Fallback: stay where the script lives
+  cd -- "${script_dir}"
 }
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -61,6 +94,14 @@ apt_try_install() {
 ### Environment checks
 ### -----------------------------
 in_git_root
+
+# Verify we are at a Python project root
+if [[ ! -f "pyproject.toml" && ! -f "setup.py" ]]; then
+  err "Neither pyproject.toml nor setup.py found in $(pwd). Ensure you run from a valid project root."
+  exit 1
+fi
+
+log "Project root: $(pwd)"
 
 ARCH="$(uname -m || true)"
 PY="$(command -v python3 || true)"
@@ -97,7 +138,8 @@ else
     VENV_FLAGS+=(--system-site-packages)
   fi
   log "Creating virtualenv at ${VENV_DIR} ..."
-  "$PY" -m venv "${VENV_DIR}" "${VENV_FLAGS[@]}"
+  # Options must come before the target directory
+  "$PY" -m venv ${VENV_FLAGS:+"${VENV_FLAGS[@]}"} "${VENV_DIR}"
 fi
 
 # shellcheck disable=SC1090
