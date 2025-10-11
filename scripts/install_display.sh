@@ -21,7 +21,7 @@ set -euo pipefail
 EXTRA_NAME="${DISPLAY_BACKEND:-all}"
 VENV_DIR=".venv"
 BACKEND=""
-MODE="editable"        # editable | copy
+MODE=""                 # editable | copy (prompt if empty in interactive mode)
 INSTALL_DIR=""
 AUTO_YES=0              # non-interactive mode
 MAKE_SERVICE=0
@@ -233,6 +233,20 @@ if [[ -z "$EXTRA_NAME" || "$EXTRA_NAME" == "auto" ]]; then
 fi
 
 # Install mode and directory
+if [[ -z "$MODE" ]]; then
+  if (( AUTO_YES == 1 || TTY == 0 )); then
+    MODE="copy"
+  else
+    echo
+    echo "Installation mode:"
+    echo "  1) Copy/Deploy to target path    - creates isolated install at custom directory (/opt/mimir-display)"
+    echo "  2) Editable in-place             - uses existing cloned repo (pip install -e)"
+    read -rp "Select mode [1]: " MODE_CHOICE
+    MODE_CHOICE=${MODE_CHOICE:-1}
+    if [[ "$MODE_CHOICE" == 2 ]]; then MODE="editable"; else MODE="copy"; fi
+  fi
+fi
+
 if [[ -z "$INSTALL_DIR" ]]; then
   if [[ "$MODE" == "copy" ]]; then
     if (( AUTO_YES == 1 || TTY == 0 )); then
