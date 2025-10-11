@@ -123,27 +123,7 @@ class ContentDownloader:
             self.logger.info(f"Removed {removed} stale temp files from cache")
         return removed
         
-    def _normalize_delivery(self, assignment: dict) -> dict:
-        """Return a canonical {'type':'url','url':..., 'content_type':...} or raise KeyError('url')."""
-        a = assignment or {}
-
-        # canonical: assignment['content']['delivery']['url']
-        d = a.get("content", {}).get("delivery")
-        if isinstance(d, dict) and d.get("url"):
-            return d
-
-        # alt: assignment['delivery']['url']
-        d = a.get("delivery")
-        if isinstance(d, dict) and d.get("url"):
-            return d
-
-        # alt: assignment['content_url']  / assignment['image_url']
-        if "content_url" in a:
-            return {"type": "url", "url": a["content_url"], "content_type": a.get("content_type")}
-        if "image_url" in a:
-            return {"type": "url", "url": a["image_url"], "content_type": a.get("content_type")}
-
-    raise KeyError("url")
+    # Note: _normalize_delivery implemented later in class (single source of truth)
     
     async def download_with_cache(
         self,
