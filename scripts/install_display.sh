@@ -140,7 +140,7 @@ detect_backend() {
     fi
     echo "hdmi"; return
   fi
-  if have_cmd python3 && python3 - <<'PY' 2>/dev/null; then
+  if have_cmd python3 && python3 - <<'PY' 2>/dev/null
 import importlib.util
 raise SystemExit(0 if importlib.util.find_spec('rgbmatrix') else 1)
 PY
