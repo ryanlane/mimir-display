@@ -271,6 +271,20 @@ If the change causes unexpected behavior for another SPI peripheral, remove the 
 
 > Rationale: Some helper scripts or prior overlays allocate both CS lines or leave CS1 asserted, which can confuse simple display drivers that expect uncontended access on CS0. Limiting to one chip select eliminates that edge case for single‑device setups like an Inky e‑ink panel.
 
+### Legacy Pi Zero W + older Inky shields
+
+On early Raspberry Pi Zero W devices paired with older Inky boards, the most reliable combination has been using the legacy Inky Python package series 1.5.x. If you encounter intermittent init errors or refresh failures even after applying `dtoverlay=spi0-0cs`, try pinning Inky to 1.5.0 on that device:
+
+```
+# Inside your virtualenv on the device
+pip install "inky[rpi]==1.5.0"
+```
+
+Notes:
+- The `[rpi]` extra pulls in RPi.GPIO and spidev automatically. Our `pyproject.toml` also declares these explicitly for the `inky` extra; either approach is fine.
+- Keep your existing `.env` (e.g., `DISPLAY_BACKEND=inky`). You may also set `INKY_IGNORE_PIN_BUSY=true` if the pin guard still complains about CS0 being in use.
+- On ARMv6 (Pi Zero/Zero W), prefer prebuilt wheels via PiWheels; if no wheels are available for your Python version, installation may be slow or fail. Using the installer’s defaults (PiWheels index) helps avoid source builds.
+
 ## Orientation Handling
 Physical rotation is declared via `DISPLAY_ORIENTATION`. Portrait modes swap the logical reported resolution and apply an internal rotation so content is rendered upright while the hardware still receives native landscape-ordered buffers.
 
