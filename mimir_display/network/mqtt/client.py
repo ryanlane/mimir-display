@@ -389,6 +389,17 @@ class MqttDisplayClient:
     def register_command_handler(self, command_type: str, handler: Callable):
         """Register a handler for MQTT commands."""
         self.commands.register_handler(command_type, handler)
+
+    async def request_reconnect(self, reason: str = "manual") -> None:
+        """Request a reconnect by closing the current MQTT connection if present."""
+        self.logger.info("MQTT reconnect requested (%s)", reason)
+        client = self._client
+        if client is None:
+            return
+        try:
+            await client.disconnect()
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug("MQTT disconnect failed: %s", e)
     
     async def run_discovery_listener(self):
         """Run the discovery command listener with automatic reconnect/backoff.

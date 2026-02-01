@@ -9,9 +9,10 @@ import asyncio
 import contextlib
 import json
 import os
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+import aiohttp
 
 from .config import Config
 import re
@@ -127,9 +128,13 @@ class MqttDisplayClientManager:
         self.stop_event = asyncio.Event()
         self.force_update_flag = False
         self.force_refresh_flag = False
+        self._mqtt_config_task: Optional[asyncio.Task] = None
 
         # Load persistent state
         self._load_state()
+
+        # Apply persisted MQTT override (if any)
+        self._apply_mqtt_override_from_state()
 
         # Setup signal handlers (best effort; may be ignored in some environments)
         # try:
@@ -227,6 +232,98 @@ class MqttDisplayClientManager:
         else:
             self.state = {}
 
+    def _apply_mqtt_override_from_state(self):
+        override = self.state.get("mqtt_override")
+        if not isinstance(override, dict):
+            return
+        host = override.get("host")
+        port = override.get("port")
+        if host:
+            self.config.set("mqtt_broker_host", host)
+        if isinstance(port, int) and port > 0:
+            self.config.set("mqtt_broker_port", port)
+
+    def _build_mqtt_config_url(self) -> str:
+        explicit = self.config.get("mqtt_config_url")
+        if explicit:
+            return explicit
+        base = (self.config.platform_url or "").rstrip("/")
+        endpoint = self.config.get("mqtt_config_endpoint", "/api/displays/mqtt/config")
+        if not endpoint.startswith("/"):
+            endpoint = f"/{endpoint}"
+        return f"{base}{endpoint}"
+
+    async def _fetch_mqtt_config(self) -> Optional[Dict[str, Any]]:
+        if not self.config.get("mqtt_config_enabled", True):
+            return None
+        url = self._build_mqtt_config_url()
+        if not url:
+            return None
+        headers = {}
+        token = self.config.get("auth_token") or ""
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        timeout = aiohttp.ClientTimeout(total=5)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status != 200:
+                        self.logger.debug("MQTT config fetch failed status=%s", resp.status)
+                        return None
+                    return await resp.json()
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug("MQTT config fetch error: %s", e)
+            return None
+
+    async def _refresh_mqtt_config(self, *, initial: bool = False) -> bool:
+        payload = await self._fetch_mqtt_config()
+        if not payload or not isinstance(payload, dict):
+            return False
+
+        if payload.get("enabled") is False:
+            if initial:
+                self.logger.info("MQTT config endpoint reports mqtt disabled")
+            return False
+
+        host = payload.get("host")
+        port = payload.get("port")
+        username = payload.get("username")
+        password = payload.get("password")
+
+        changed = False
+        if isinstance(host, str) and host and host != self.config.mqtt_broker_host:
+            self.config.set("mqtt_broker_host", host)
+            changed = True
+        if isinstance(port, int) and port > 0 and port != self.config.mqtt_broker_port:
+            self.config.set("mqtt_broker_port", port)
+            changed = True
+        if username is not None and username != self.config.mqtt_username:
+            self.config.set("mqtt_username", username)
+            changed = True
+        if password is not None and password != self.config.mqtt_password:
+            self.config.set("mqtt_password", password)
+            changed = True
+
+        if changed:
+            self.state["mqtt_override"] = {
+                "host": self.config.mqtt_broker_host,
+                "port": self.config.mqtt_broker_port,
+            }
+            self._save_state()
+            self.logger.info(
+                "MQTT broker updated via API: %s:%s",
+                self.config.mqtt_broker_host,
+                self.config.mqtt_broker_port,
+            )
+            await self.mqtt_client.request_reconnect("api_config_update")
+        return changed
+
+    async def _mqtt_config_poll_loop(self):
+        interval = max(10, int(self.config.get("mqtt_config_poll_seconds", 60)))
+        while not self.stop_event.is_set():
+            await asyncio.sleep(interval)
+            await self._refresh_mqtt_config()
+
     def _save_state(self):
         """Save persistent state to disk."""
         try:
@@ -279,6 +376,8 @@ class MqttDisplayClientManager:
         """Run in discovery-only mode with MQTT presence."""
         self.logger.info("Starting discovery mode with MQTT presence")
 
+        await self._refresh_mqtt_config(initial=True)
+
         print(f"Display ID: {self.display_id}")
         print(f"Display Name: {self.config.display_name}")
         print(f"Location: {self.config.display_location}")
@@ -288,6 +387,10 @@ class MqttDisplayClientManager:
 
         # Start services (mDNS for discovery, webhook for manual triggers)
         await self.start_services()
+
+        # Start MQTT config polling (optional)
+        if self.config.get("mqtt_config_enabled", True):
+            self._mqtt_config_task = asyncio.create_task(self._mqtt_config_poll_loop(), name="mqtt.config")
         print("Waiting for API to discover and initiate registration...")
         print("Press Ctrl+C to stop...")
 
@@ -366,6 +469,12 @@ class MqttDisplayClientManager:
 
         # Stop services (sync)
         await self.stop_services()
+
+        if self._mqtt_config_task:
+            self._mqtt_config_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._mqtt_config_task
+            self._mqtt_config_task = None
 
         # Close MQTT client if it supports an async close/disconnect
         try:

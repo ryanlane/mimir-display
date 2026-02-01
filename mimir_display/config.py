@@ -64,6 +64,10 @@ class Config:
             "mqtt_username": os.getenv("MQTT_USERNAME"),
             "mqtt_password": os.getenv("MQTT_PASSWORD"),
             "mqtt_heartbeat_interval": env_int("MQTT_HEARTBEAT_INTERVAL", 30),
+            "mqtt_config_enabled": env_str("MQTT_CONFIG_ENABLED", "true").lower() == "true",
+            "mqtt_config_poll_seconds": env_int("MQTT_CONFIG_POLL_SECONDS", 60),
+            "mqtt_config_url": os.getenv("MQTT_CONFIG_URL", ""),
+            "mqtt_config_endpoint": os.getenv("MQTT_CONFIG_ENDPOINT", "/api/displays/mqtt/config"),
             
             # Operational modes
             "discovery_mode": env_str("DISCOVERY_MODE", "false").lower() == "true",
