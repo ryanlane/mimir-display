@@ -22,6 +22,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
     Supported endpoints:
     - POST /update: Trigger immediate content check and update
     - POST /refresh: Force refresh of current content (bypass cache)
+    - POST /config: Apply configuration payload (MQTT broker, platform URL)
     - GET /status: Get current display status information
     
     The handler requires a reference to the DisplayClient instance to
@@ -79,6 +80,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'{"status": "refresh_triggered"}')
                 
+            elif path == 'config':
+                raw = self.rfile.read(int(self.headers.get('Content-Length', 0)) or 0)
+                payload = json.loads(raw.decode('utf-8')) if raw else {}
+                self.display_client.logger.info("Config update received via webhook")
+                self.display_client.apply_bootstrap_config(payload)
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(b'{"status": "config_applied"}')
+
             else:
                 self.send_error(404, "Endpoint not found")
                 

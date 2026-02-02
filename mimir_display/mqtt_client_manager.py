@@ -129,6 +129,7 @@ class MqttDisplayClientManager:
         self.force_update_flag = False
         self.force_refresh_flag = False
         self._mqtt_config_task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Load persistent state
         self._load_state()
@@ -235,13 +236,16 @@ class MqttDisplayClientManager:
     def _apply_mqtt_override_from_state(self):
         override = self.state.get("mqtt_override")
         if not isinstance(override, dict):
-            return
+            override = {}
         host = override.get("host")
         port = override.get("port")
+        platform_url = self.state.get("platform_url_override")
         if host:
             self.config.set("mqtt_broker_host", host)
         if isinstance(port, int) and port > 0:
             self.config.set("mqtt_broker_port", port)
+        if isinstance(platform_url, str) and platform_url:
+            self.config.set("platform_url", platform_url)
 
     def _build_mqtt_config_url(self) -> str:
         explicit = self.config.get("mqtt_config_url")
@@ -289,6 +293,7 @@ class MqttDisplayClientManager:
         port = payload.get("port")
         username = payload.get("username")
         password = payload.get("password")
+        platform_url = payload.get("platform_url")
 
         changed = False
         if isinstance(host, str) and host and host != self.config.mqtt_broker_host:
@@ -303,12 +308,17 @@ class MqttDisplayClientManager:
         if password is not None and password != self.config.mqtt_password:
             self.config.set("mqtt_password", password)
             changed = True
+        if isinstance(platform_url, str) and platform_url and platform_url != self.config.platform_url:
+            self.config.set("platform_url", platform_url)
+            changed = True
 
         if changed:
             self.state["mqtt_override"] = {
                 "host": self.config.mqtt_broker_host,
                 "port": self.config.mqtt_broker_port,
             }
+            if platform_url:
+                self.state["platform_url_override"] = self.config.platform_url
             self._save_state()
             self.logger.info(
                 "MQTT broker updated via API: %s:%s",
@@ -317,6 +327,54 @@ class MqttDisplayClientManager:
             )
             await self.mqtt_client.request_reconnect("api_config_update")
         return changed
+
+    async def _apply_bootstrap_config_async(self, payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            return
+        host = payload.get("host")
+        port = payload.get("port")
+        username = payload.get("username")
+        password = payload.get("password")
+        platform_url = payload.get("platform_url")
+
+        changed = False
+        if isinstance(host, str) and host and host != self.config.mqtt_broker_host:
+            self.config.set("mqtt_broker_host", host)
+            changed = True
+        if isinstance(port, int) and port > 0 and port != self.config.mqtt_broker_port:
+            self.config.set("mqtt_broker_port", port)
+            changed = True
+        if username is not None and username != self.config.mqtt_username:
+            self.config.set("mqtt_username", username)
+            changed = True
+        if password is not None and password != self.config.mqtt_password:
+            self.config.set("mqtt_password", password)
+            changed = True
+        if isinstance(platform_url, str) and platform_url and platform_url != self.config.platform_url:
+            self.config.set("platform_url", platform_url)
+            changed = True
+
+        if changed:
+            self.state["mqtt_override"] = {
+                "host": self.config.mqtt_broker_host,
+                "port": self.config.mqtt_broker_port,
+            }
+            if platform_url:
+                self.state["platform_url_override"] = self.config.platform_url
+            self._save_state()
+            self.logger.info(
+                "Bootstrap config applied: mqtt=%s:%s",
+                self.config.mqtt_broker_host,
+                self.config.mqtt_broker_port,
+            )
+            await self.mqtt_client.request_reconnect("bootstrap_config")
+
+    def apply_bootstrap_config(self, payload: Dict[str, Any]) -> None:
+        """Called by the webhook server thread to apply config."""
+        if self._loop:
+            asyncio.run_coroutine_threadsafe(self._apply_bootstrap_config_async(payload), self._loop)
+        else:
+            self.logger.warning("Event loop not ready; bootstrap config ignored")
 
     async def _mqtt_config_poll_loop(self):
         interval = max(10, int(self.config.get("mqtt_config_poll_seconds", 60)))
@@ -375,6 +433,8 @@ class MqttDisplayClientManager:
     async def discovery_mode_loop(self):
         """Run in discovery-only mode with MQTT presence."""
         self.logger.info("Starting discovery mode with MQTT presence")
+
+        self._loop = asyncio.get_running_loop()
 
         await self._refresh_mqtt_config(initial=True)
 
