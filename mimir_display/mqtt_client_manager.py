@@ -19,6 +19,7 @@ import re
 from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService
 from .content import ImageCache, DisplayManager
+from .content.splash import build_splash, generate_pair_code, get_local_ip
 from .hardware import get_display_capabilities
 from .utils import setup_logger
 from .utils.helpers import resolve_writable_dir
@@ -71,20 +72,42 @@ class MqttDisplayClientManager:
         # Get hardware capabilities (after stable id set)
         self.capabilities = get_display_capabilities()
 
-        # Optional: display startup logo/image centered before any network activity.
-        # This provides immediate visual feedback that the client launched.
+        # Generate a pairing code and store it for MQTT publishing after connection.
+        # The code is generated locally so it can appear on the splash before MQTT starts.
+        self.pair_code: str = generate_pair_code()
+        self.pair_code_published: bool = False
+
+        # Build and display the dynamic startup splash screen:
+        #   logo + QR code + 6-char pairing code + IP address
         try:
-            # Use provided image path (env override STARTUP_LOGO_PATH) or built-in resource.
-            startup_logo = os.environ.get("STARTUP_LOGO_PATH") or os.path.join(os.path.dirname(__file__), "images", "startup.png")
-            if os.path.exists(startup_logo):
-                # Use a lightweight on-demand DisplayManager instance after capabilities retrieval.
-                tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
-                tmp_dm.display_from_file(startup_logo)
-                self.logger.info("Startup logo displayed (%s)", startup_logo)
-            else:
-                self.logger.debug("No startup logo found at %s", startup_logo)
+            logo_path = (
+                os.environ.get("STARTUP_LOGO_PATH")
+                or os.path.join(os.path.dirname(__file__), "images", "startup.png")
+            )
+            res = self.capabilities.get("resolution") or [800, 480]
+            splash_w, splash_h = int(res[0]), int(res[1])
+
+            splash_img = build_splash(
+                width=splash_w,
+                height=splash_h,
+                pair_code=self.pair_code,
+                platform_url=self.config.platform_url,
+                ip_address=get_local_ip(),
+                logo_path=logo_path if os.path.exists(logo_path) else None,
+            )
+
+            splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
+            os.makedirs(os.path.dirname(splash_path), exist_ok=True)
+            splash_img.save(splash_path, format="PNG")
+
+            tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
+            tmp_dm.display_from_file(splash_path)
+            self.logger.info(
+                "Startup splash displayed (pair_code=%s, size=%dx%d)",
+                self.pair_code, splash_w, splash_h,
+            )
         except Exception as e:  # noqa: BLE001 - non-fatal
-            self.logger.debug("Startup logo display failed: %s", e, exc_info=True)
+            self.logger.debug("Startup splash failed: %s", e, exc_info=True)
 
         # Optional startup test pattern for non e-ink framebuffer displays.
         # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
@@ -118,6 +141,8 @@ class MqttDisplayClientManager:
             self.metadata,
             self._display_callback,
         )
+        # Pass the pairing code so it gets published on first MQTT connection
+        self.mqtt_client.set_pair_code(self.pair_code)
 
         # Initialize network services
         self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None

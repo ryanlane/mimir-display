@@ -79,6 +79,10 @@ class MqttDisplayClient:
         self.commands.set_presence_manager(self.presence)
         # after wiring event publisher & commands:
         self.commands.set_scene_callbacks(self.set_scene_id, self.clear_scene_id)
+        self.commands.set_registration_manager(self.registration)
+
+        # Pairing code (set externally before run_discovery_listener starts)
+        self._pair_code: Optional[str] = None
 
         # State
         self._client: Optional[Client] = None
@@ -390,6 +394,10 @@ class MqttDisplayClient:
         """Register a handler for MQTT commands."""
         self.commands.register_handler(command_type, handler)
 
+    def set_pair_code(self, code: str) -> None:
+        """Store the pairing code to be published on the next MQTT connection."""
+        self._pair_code = code
+
     async def request_reconnect(self, reason: str = "manual") -> None:
         """Request a reconnect by closing the current MQTT connection if present."""
         self.logger.info("MQTT reconnect requested (%s)", reason)
@@ -435,6 +443,28 @@ class MqttDisplayClient:
                     await client.subscribe(self.topics.commands, qos=1)
                     self.logger.info("Subscribed commands_topic=%s", self.topics.commands)
 
+                    # Publish pair code so the server can store it for user claiming.
+                    if self._pair_code:
+                        try:
+                            ack_topic = self.topics.pair_ack
+                            await client.subscribe(ack_topic, qos=1)
+                            payload = json.dumps({
+                                "device_id": self.device_id,
+                                "code": self._pair_code,
+                                "capabilities": self.registration.capabilities,
+                                "metadata": self.registration.metadata,
+                                "reply_to": ack_topic,
+                            })
+                            await client.publish(
+                                self.topics.pair_request(), payload, qos=1
+                            )
+                            self.logger.info(
+                                "Pair request published code=%s ack_topic=%s",
+                                self._pair_code, ack_topic,
+                            )
+                        except Exception as _pair_err:  # noqa: BLE001
+                            self.logger.warning("Failed to publish pair request: %s", _pair_err)
+
                     # --- Watchdog setup ---
                     last_activity = time.monotonic()
 
@@ -460,7 +490,26 @@ class MqttDisplayClient:
                         async for message in client.messages:
                             last_activity = time.monotonic()  # activity mark
                             try:
-                                await self.commands.handle_command_message(message)
+                                topic_str = str(getattr(message, 'topic', ''))
+                                if self._pair_code and topic_str == self.topics.pair_ack:
+                                    # Pair ack received — log and clear so we don't re-publish
+                                    try:
+                                        ack_data = json.loads(message.payload)
+                                    except Exception:
+                                        ack_data = {}
+                                    status = ack_data.get("status", "unknown")
+                                    self.logger.info(
+                                        "Pair ack received code=%s status=%s payload=%s",
+                                        self._pair_code, status, ack_data,
+                                    )
+                                    if status in ("ok", "pending"):
+                                        # "pending" = server accepted and stored the code.
+                                        # "ok" = legacy/alternative success signal.
+                                        # Either way, stop re-publishing on reconnect — the
+                                        # splash already shows the code and the server has it.
+                                        self._pair_code = None
+                                else:
+                                    await self.commands.handle_command_message(message)
                             except Exception as e:  # noqa: BLE001 - includes CancelledError check
                                 if isinstance(e, asyncio.CancelledError):
                                     raise

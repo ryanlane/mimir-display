@@ -49,13 +49,15 @@ class MqttCommandHandler:
         self._set_scene_cb: Callable[[str, str | None], Any] | None = None
         self._clear_scene_cb: Callable[..., Any] | None = None
         self._presence_manager: MqttPresenceManager | None = None
-        
+        self._registration: Any | None = None  # MqttRegistrationManager, set externally
+
         # Register built-in handlers
         self.register_handler("assign", self._handle_assignment)
         self.register_handler("refresh", self._handle_refresh)
         self.register_handler("register", self._handle_register_request)
         self.register_handler("ready", self._handle_ready)
         self.register_handler("registration_complete", self._handle_registration_complete)
+        self.register_handler("finalize_registration", self._handle_finalize_registration)
         self.register_handler("display_image", self._handle_display_image)
         self.register_handler("set_scene", self._handle_set_scene)
         self.register_handler("clear_scene", self._handle_clear_scene)
@@ -312,6 +314,10 @@ class MqttCommandHandler:
             self.current_scene_id,
         )
 
+    def set_registration_manager(self, registration: Any) -> None:
+        """Provide access to MqttRegistrationManager so finalize_registration can persist state."""
+        self._registration = registration
+
     def set_scene_callbacks(self, set_cb: Callable[[str, str | None], Any], clear_cb: Callable[[], Any]):
         self._set_scene_cb = set_cb
         self._clear_scene_cb = clear_cb
@@ -383,6 +389,44 @@ class MqttCommandHandler:
                 assignment_id=command.get("assignment_id", "registration_complete"),
                 success=True,
                 message=message,
+            )
+
+    async def _handle_finalize_registration(self, command: dict[str, Any]):
+        """Handle finalize_registration sent by the server after a pairing claim.
+
+        The pairing flow is:
+          Display publishes pair request → server stores code → user enters code in UI
+          → server creates DB record → server sends finalize_registration to display/cmd
+
+        This is the 'you have been claimed and registered' signal.  We persist
+        the assigned display_id so is_registered() returns True on next start.
+        """
+        display_id: str | None = command.get("display_id")
+        registration_key: str | None = command.get("registration_key")
+        self.logger.info(
+            "Received finalize_registration display_id=%s", display_id
+        )
+
+        # Persist registration state using the registration manager if available
+        if hasattr(self, "_registration") and self._registration is not None:
+            try:
+                self._registration.update_registration(
+                    device_id=self.topics.device_id,
+                    assigned_id=display_id or self.topics.device_id,
+                    service_config={"registration_key": registration_key} if registration_key else {},
+                )
+                self.logger.info(
+                    "Registration state persisted for display_id=%s", display_id
+                )
+            except Exception as e:
+                self.logger.warning("Could not persist registration state: %s", e)
+
+        # Notify via ack
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=command.get("assignment_id", "finalize_registration"),
+                success=True,
+                message=f"Pairing complete — display_id={display_id}",
             )
 
     # ---------------------------------------------------------------------

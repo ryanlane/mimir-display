@@ -12,3 +12,9 @@ class MqttTopicManager:
     def commands(self) -> str: return f"{self.base}/cmd"
     @staticmethod
     def registry() -> str: return "mimir/registry/register"
+
+    @property
+    def pair_ack(self) -> str: return f"{self.base}/pair/ack"
+
+    @staticmethod
+    def pair_request() -> str: return "mimir/registry/pair"
