@@ -34,6 +34,28 @@ The script:
 7. (HyperPixel) Optionally appends overlay line to boot config
 8. Displays a startup logo on service launch (customizable via `STARTUP_LOGO_PATH`)
 
+## Manual Service Connection Setup
+
+When automatic discovery or bootstrap is unavailable, use the interactive helper:
+
+```bash
+./scripts/setup_connection.sh
+```
+
+It updates the display `.env` (or `/etc/mimir-display/.env` on installed systems) with:
+
+- `PLATFORM_URL`
+- `MQTT_BROKER_HOST`
+- `MQTT_BROKER_PORT`
+- optional `MQTT_USERNAME` / `MQTT_PASSWORD`
+- optional `DISPLAY_NAME` / `DISPLAY_LOCATION`
+
+After saving, restart the service:
+
+```bash
+sudo systemctl restart mimir-display
+```
+
 ## Manual Install
 
 ```bash
