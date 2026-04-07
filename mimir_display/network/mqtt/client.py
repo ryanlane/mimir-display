@@ -87,6 +87,7 @@ class MqttDisplayClient:
         # Optional one-shot callback fired the first time MQTT connects successfully
         self._on_first_connect: Optional[Callable[[], None]] = None
         self._first_connect_fired = False
+        self._on_pair_status: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
         # State
         self._client: Optional[Client] = None
@@ -406,6 +407,10 @@ class MqttDisplayClient:
         """Register a callback invoked once when MQTT first connects successfully."""
         self._on_first_connect = callback
 
+    def set_on_pair_status(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
+        """Register a callback invoked when the server acks the pair code."""
+        self._on_pair_status = callback
+
     async def request_reconnect(self, reason: str = "manual") -> None:
         """Request a reconnect by closing the current MQTT connection if present."""
         self.logger.info("MQTT reconnect requested (%s)", reason)
@@ -516,6 +521,11 @@ class MqttDisplayClient:
                                         "Pair ack received code=%s status=%s payload=%s",
                                         self._pair_code, status, ack_data,
                                     )
+                                    if self._on_pair_status:
+                                        try:
+                                            self._on_pair_status(status, ack_data)
+                                        except Exception as callback_error:  # noqa: BLE001
+                                            self.logger.debug("pair status callback error: %s", callback_error)
                                     if status in ("ok", "pending"):
                                         # "pending" = server accepted and stored the code.
                                         # "ok" = legacy/alternative success signal.

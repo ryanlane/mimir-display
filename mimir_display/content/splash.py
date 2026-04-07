@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import secrets
 import socket
-from pathlib import Path
 from typing import Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
@@ -50,6 +49,12 @@ def get_local_ip() -> str:
         return "Unknown IP"
 
 
+def _status_bar_h(W: int, H: int) -> int:
+    """Height in pixels reserved at the bottom for the status bar."""
+    small_fs = max(8, min(W, H) // 28)
+    return small_fs + 16
+
+
 def build_splash(
     width: int,
     height: int,
@@ -57,6 +62,7 @@ def build_splash(
     platform_url: str,
     ip_address: str,
     logo_path: Optional[str] = None,
+    status_text: str = "",
 ) -> Image.Image:
     """
     Compose and return a startup splash PIL Image.
@@ -68,6 +74,7 @@ def build_splash(
         platform_url: Base URL of the Mimir server (used to build the QR URL).
         ip_address:   IP address string to display.
         logo_path:    Optional path to the logo PNG/JPEG.
+        status_text:  Optional initial status line text.
 
     Returns:
         RGB PIL Image ready to be saved and passed to DisplayManager.
@@ -82,29 +89,62 @@ def build_splash(
 
     pad = max(8, min(width, height) // 20)
 
-    logo_img = _load_logo(logo_path, width, height, is_portrait, is_square, pad)
-    qr_img   = _make_qr_image(pair_url, width, height, is_portrait, is_square, pad)
+    # Reserve a fixed strip at the bottom for the status bar.
+    # All layout functions receive H_eff (content height) and never draw below it.
+    sb_h = _status_bar_h(width, height)
+    H_eff = height - sb_h
 
-    code_fs  = max(14, min(width, height) // 8)
-    small_fs = max(8,  min(width, height) // 28)
+    # Draw status bar background (light gray rule)
+    draw.rectangle([(0, H_eff), (width, height)], fill=(235, 235, 240))
+    draw.line([(0, H_eff), (width, H_eff)], fill=_RULE, width=1)
+
+    code_fs  = max(14, min(width, H_eff) // 8)
+    small_fs = max(8,  min(width, H_eff) // 28)
 
     code_font  = _load_font(code_fs,  bold=True)
     small_font = _load_font(small_fs, bold=False)
 
+    logo_img = _load_logo(logo_path, width, H_eff, is_portrait, is_square, pad)
+    qr_img   = _make_qr_image(pair_url, width, H_eff, is_portrait, is_square, pad)
+
     if is_portrait:
-        _layout_portrait(canvas, draw, width, height, pad,
+        _layout_portrait(canvas, draw, width, H_eff, pad,
                          logo_img, qr_img, pair_code, ip_address,
                          code_font, small_font)
     elif is_square:
-        _layout_square(canvas, draw, width, height, pad,
+        _layout_square(canvas, draw, width, H_eff, pad,
                        logo_img, qr_img, pair_code, ip_address,
                        code_font, small_font)
     else:
-        _layout_landscape(canvas, draw, width, height, pad,
+        _layout_landscape(canvas, draw, width, H_eff, pad,
                           logo_img, qr_img, pair_code, ip_address,
                           code_font, small_font)
 
+    # Draw initial status text if provided
+    if status_text:
+        _draw_status_text(draw, width, height, sb_h, small_font, status_text, is_error=False)
+
     return canvas
+
+
+def _draw_status_text(
+    draw: ImageDraw.ImageDraw,
+    W: int,
+    H: int,
+    sb_h: int,
+    font: ImageFont.ImageFont,
+    text: str,
+    is_error: bool = False,
+) -> None:
+    """Fill the reserved status bar at the bottom with coloured text."""
+    if is_error:
+        bg = (180, 40, 40)
+        fg = (255, 255, 255)
+        draw.rectangle([(0, H - sb_h), (W, H)], fill=bg)
+    else:
+        fg = _ACCENT
+    y = H - sb_h + (sb_h - max(8, min(W, H) // 28)) // 2
+    _draw_text_centered(draw, W // 2, y, text, font, fg)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -124,7 +164,7 @@ def _load_logo(
         elif is_square:
             max_w, max_h = W // 2 - pad * 2, H // 4
         else:
-            max_w, max_h = W // 3 - pad * 2, H // 2 - pad * 4
+            max_w, max_h = W // 2 - pad * 2, H - pad * 2
         img.thumbnail((max_w, max_h), Image.LANCZOS)
         return img
     except Exception:
@@ -231,6 +271,27 @@ def _paste_image(
     return img.height
 
 
+def _fit_image(
+    img: Image.Image,
+    max_w: int,
+    max_h: int,
+    resample: int,
+) -> Image.Image:
+    """Return a resized copy that fits within the requested box."""
+    if img.width <= max_w and img.height <= max_h:
+        return img
+
+    scale = min(max_w / img.width, max_h / img.height)
+    if scale <= 0:
+        return img
+
+    new_size = (
+        max(1, int(img.width * scale)),
+        max(1, int(img.height * scale)),
+    )
+    return img.resize(new_size, resample)
+
+
 # ── Layout implementations ─────────────────────────────────────────────────────
 
 def _layout_landscape(
@@ -244,42 +305,57 @@ def _layout_landscape(
     small_font: ImageFont.ImageFont,
 ) -> None:
     """
-    Left half: logo (vertically centered).
-    Right half: QR code (vertically centered).
-    Vertical centre divider.
-    Bottom strip: pairing code | IP address (centred in respective halves).
+    Left half:  logo (upper), pairing code + IP address (lower).
+    Right half: QR code (centred) + scan label.
+    H is the effective content height (status bar already excluded).
     """
     half = W // 2
+    left_cx  = half // 2
+    right_cx = half + half // 2
 
-    # Left — logo
-    if logo_img:
-        ly = (H - logo_img.height) // 2
-        _paste_image(canvas, logo_img, half // 2, max(pad, ly))
+    # ── Measure text heights up front ────────────────────────────────────────
+    code_h = _text_size(draw, code, code_font)[1]
+    ip_text = "IP: " + ip
+    ip_h    = _text_size(draw, ip_text, small_font)[1]
+    label_h = _text_size(draw, "Scan QR or enter code to pair", small_font)[1]
 
-    # Right — QR code
-    qr_y = (H - qr_img.height) // 2
-    _paste_image(canvas, qr_img, half + half // 2, max(pad, qr_y))
+    # ── Left half ─────────────────────────────────────────────────────────────
+    # Reserve the bottom area for: IP text + gap + code text + pad
+    bottom_block_h = ip_h + pad // 2 + code_h + pad
+    logo_area_h    = H - bottom_block_h - pad
+    left_area_w = half - pad * 2
 
-    # Divider
-    draw.line([(half, pad * 2), (half, H - pad * 2)], fill=_RULE, width=1)
+    if logo_img and logo_area_h > pad * 2:
+        fitted_logo = _fit_image(logo_img, left_area_w, logo_area_h, Image.LANCZOS)
+        ly = pad + (logo_area_h - fitted_logo.height) // 2
+        _paste_image(canvas, fitted_logo, left_cx, max(pad, ly))
 
-    # Bottom: code centred left, IP centred right
-    code_h  = _text_size(draw, code, code_font)[1]
-    ip_h    = _text_size(draw, ip,   small_font)[1]
-
+    # Stack IP above code, both anchored to the bottom of the content area
+    ip_y   = H - pad - code_h - pad // 2 - ip_h
     code_y = H - pad - code_h
-    ip_y   = H - pad - ip_h
+    _draw_text_centered(draw, left_cx, ip_y,   ip_text, small_font, _GRAY)
+    _draw_text_centered(draw, left_cx, code_y, code,    code_font,  _ACCENT)
 
-    # If both fit side by side in the bottom strip:
-    _draw_text_centered(draw, half // 2,        code_y, code, code_font,  _ACCENT)
-    _draw_text_centered(draw, half // 2,        ip_y - code_h - pad // 2, "IP: " + ip, small_font, _GRAY)
-    _draw_text_centered(draw, half + half // 2, ip_y,   "Scan QR or enter code to pair", small_font, _GRAY)
+    # ── Right half ────────────────────────────────────────────────────────────
+    # Centre QR; place label below it, leaving at least pad above the bottom
+    label_area_h = label_h + pad
+    qr_area_h    = H - label_area_h - pad
+    right_area_w = half - pad * 2
+    fitted_qr = _fit_image(qr_img, right_area_w, qr_area_h, Image.NEAREST)
+    qr_y = pad + (qr_area_h - fitted_qr.height) // 2
+    _paste_image(canvas, fitted_qr, right_cx, max(pad, qr_y))
+
+    label_y = H - pad - label_h
+    _draw_text_centered(draw, right_cx, label_y, "Scan QR or enter code to pair", small_font, _GRAY)
+
+    # ── Vertical divider ──────────────────────────────────────────────────────
+    draw.line([(half, pad), (half, H - pad)], fill=_RULE, width=1)
 
 
 def _layout_portrait(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
-    W: int, H: int, pad: int,
+    W: int, _H: int, pad: int,
     logo_img: Optional[Image.Image],
     qr_img: Image.Image,
     code: str, ip: str,
@@ -321,12 +397,15 @@ def overlay_status(
     is_error: bool = False,
 ) -> Optional[Image.Image]:
     """
-    Load an existing splash image and overlay a status banner at the bottom.
+    Update the reserved status bar at the bottom of an existing splash image.
+
+    The status bar area was pre-allocated by build_splash, so this never
+    touches the pair code or any other content above it.
 
     Args:
         splash_path: Path to the existing splash PNG.
-        status_text: Short message to display in the banner.
-        is_error:    If True, use a red banner; otherwise green.
+        status_text: Short message to display.
+        is_error:    If True, use a red background; otherwise the accent colour.
 
     Returns:
         Updated PIL Image, or None if the file cannot be read.
@@ -337,14 +416,15 @@ def overlay_status(
         return None
 
     W, H = img.size
-    draw = ImageDraw.Draw(img)
+    sb_h = _status_bar_h(W, H)
     small_fs = max(8, min(W, H) // 28)
     font = _load_font(small_fs, bold=False)
+    draw = ImageDraw.Draw(img)
 
-    banner_h = small_fs + 12
-    banner_color = (180, 40, 40) if is_error else (30, 110, 50)
-    draw.rectangle([(0, H - banner_h), (W, H)], fill=banner_color)
-    _draw_text_centered(draw, W // 2, H - banner_h + 6, status_text, font, (255, 255, 255))
+    # Restore the neutral status bar background first, then colour if error
+    draw.rectangle([(0, H - sb_h), (W, H)], fill=(235, 235, 240))
+    draw.line([(0, H - sb_h), (W, H - sb_h)], fill=_RULE, width=1)
+    _draw_status_text(draw, W, H, sb_h, font, status_text, is_error=is_error)
     return img
 
 

@@ -152,10 +152,12 @@ class MqttDisplayClientManager:
         )
         # Pass the pairing code so it gets published on first MQTT connection
         self.mqtt_client.set_pair_code(self.pair_code)
+        self.mqtt_client.set_on_pair_status(self._handle_pair_status)
 
-        # Update splash banner when MQTT first connects
+        # MQTT connectivity alone is not enough; the pair code must be accepted
+        # by the server before the user can successfully claim it.
         self.mqtt_client.set_on_first_connect(
-            lambda: self._update_splash_status("Connected — enter code in Mimir to pair")
+            lambda: self._update_splash_status("Connected to MQTT — registering pair code…")
         )
 
         # Initialize network services
@@ -259,6 +261,16 @@ class MqttDisplayClientManager:
             dm.display_from_file(self._splash_path)
         except Exception as e:  # noqa: BLE001
             self.logger.debug("Failed to update splash status: %s", e)
+
+    def _handle_pair_status(self, status: str, payload: Dict[str, Any]) -> None:
+        """Reflect pair-code readiness on the splash screen."""
+        if status in ("ok", "pending"):
+            self._update_splash_status("Connected — enter code in Mimir to pair")
+            return
+
+        if status == "error":
+            message = str(payload.get("message") or "Pairing setup failed")
+            self._update_splash_status(message, is_error=True)
 
     def _apply_device_config(self) -> None:
         """Apply server-assigned config from device_config.json.
