@@ -84,6 +84,10 @@ class MqttDisplayClient:
         # Pairing code (set externally before run_discovery_listener starts)
         self._pair_code: Optional[str] = None
 
+        # Optional one-shot callback fired the first time MQTT connects successfully
+        self._on_first_connect: Optional[Callable[[], None]] = None
+        self._first_connect_fired = False
+
         # State
         self._client: Optional[Client] = None
         self._running = False
@@ -398,6 +402,10 @@ class MqttDisplayClient:
         """Store the pairing code to be published on the next MQTT connection."""
         self._pair_code = code
 
+    def set_on_first_connect(self, callback: Callable[[], None]) -> None:
+        """Register a callback invoked once when MQTT first connects successfully."""
+        self._on_first_connect = callback
+
     async def request_reconnect(self, reason: str = "manual") -> None:
         """Request a reconnect by closing the current MQTT connection if present."""
         self.logger.info("MQTT reconnect requested (%s)", reason)
@@ -438,6 +446,12 @@ class MqttDisplayClient:
                         self.config.mqtt_broker_host,
                         self.config.mqtt_broker_port,
                     )
+                    if not self._first_connect_fired and self._on_first_connect:
+                        self._first_connect_fired = True
+                        try:
+                            self._on_first_connect()
+                        except Exception as _cb_err:  # noqa: BLE001
+                            self.logger.debug("on_first_connect callback error: %s", _cb_err)
                     self.commands.set_mqtt_client(client)
 
                     await client.subscribe(self.topics.commands, qos=1)

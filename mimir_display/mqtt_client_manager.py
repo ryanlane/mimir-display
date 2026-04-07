@@ -17,9 +17,9 @@ import aiohttp
 from .config import Config
 import re
 from .network.mqtt_client import MqttDisplayClient
-from .network import WebhookServer, MDNSService
+from .network import WebhookServer, MDNSService, discover_mimir_server
 from .content import ImageCache, DisplayManager
-from .content.splash import build_splash, generate_pair_code, get_local_ip
+from .content.splash import build_splash, generate_pair_code, get_local_ip, overlay_status
 from .hardware import get_display_capabilities
 from .utils import setup_logger
 from .utils.helpers import resolve_writable_dir
@@ -86,6 +86,7 @@ class MqttDisplayClientManager:
 
         # Build and display the dynamic startup splash screen:
         #   logo + QR code + 6-char pairing code + IP address
+        self._splash_path: Optional[str] = None
         try:
             logo_path = (
                 os.environ.get("STARTUP_LOGO_PATH")
@@ -106,6 +107,7 @@ class MqttDisplayClientManager:
             splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
             os.makedirs(os.path.dirname(splash_path), exist_ok=True)
             splash_img.save(splash_path, format="PNG")
+            self._splash_path = splash_path
 
             tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
             tmp_dm.display_from_file(splash_path)
@@ -150,6 +152,11 @@ class MqttDisplayClientManager:
         )
         # Pass the pairing code so it gets published on first MQTT connection
         self.mqtt_client.set_pair_code(self.pair_code)
+
+        # Update splash banner when MQTT first connects
+        self.mqtt_client.set_on_first_connect(
+            lambda: self._update_splash_status("Connected — enter code in Mimir to pair")
+        )
 
         # Initialize network services
         self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
@@ -238,6 +245,20 @@ class MqttDisplayClientManager:
                 "fallback": "default_content"
             }
 
+
+    def _update_splash_status(self, text: str, is_error: bool = False) -> None:
+        """Overwrite the status banner on the startup splash and redisplay it."""
+        if not self._splash_path or not os.path.exists(self._splash_path):
+            return
+        try:
+            updated = overlay_status(self._splash_path, text, is_error=is_error)
+            if updated is None:
+                return
+            updated.save(self._splash_path, format="PNG")
+            dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
+            dm.display_from_file(self._splash_path)
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug("Failed to update splash status: %s", e)
 
     def _apply_device_config(self) -> None:
         """Apply server-assigned config from device_config.json.
@@ -507,7 +528,49 @@ class MqttDisplayClientManager:
 
         self._loop = asyncio.get_running_loop()
 
-        await self._refresh_mqtt_config(initial=True)
+        # ── mDNS server discovery ─────────────────────────────────────────────
+        # If PLATFORM_URL was not explicitly set by the operator (i.e. it's still
+        # the default localhost value), try to find the Mimir server via mDNS.
+        # The mimir-discovery sidecar advertises _mimir._tcp.local. from the host
+        # network, so this works without any pre-configuration on the display.
+        explicit_platform = os.environ.get("PLATFORM_URL", "").strip()
+        platform_is_default = not explicit_platform or explicit_platform in (
+            "http://localhost:5000", "localhost:5000",
+        )
+        if platform_is_default:
+            self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 5s)…")
+            self._update_splash_status("Searching for Mimir server…")
+            mdns_url = await discover_mimir_server(timeout=5.0)
+            if mdns_url:
+                self.config.set("platform_url", mdns_url)
+                self.logger.info("Mimir server discovered via mDNS: %s", mdns_url)
+                self._update_splash_status(f"Found server: {mdns_url}")
+                # Persist to state so next boot doesn't need mDNS scan
+                self.state["platform_url_override"] = mdns_url
+                self._save_state()
+            else:
+                self.logger.warning(
+                    "No Mimir server found via mDNS. "
+                    "Is the mimir-discovery sidecar running? "
+                    "Falling back to MQTT_BROKER_HOST=%s.",
+                    self.config.mqtt_broker_host or "localhost",
+                )
+
+        # ── HTTP bootstrap for MQTT config ────────────────────────────────────
+        bootstrap_ok = await self._refresh_mqtt_config(initial=True)
+        if not bootstrap_ok:
+            host = self.config.mqtt_broker_host or "localhost"
+            if host in ("localhost", "127.0.0.1"):
+                self.logger.warning(
+                    "MQTT bootstrap config not available — PLATFORM_URL may not be set. "
+                    "Trying MQTT_BROKER_HOST=%s (likely wrong for remote devices). "
+                    "Set PLATFORM_URL=http://<server-ip>:5000 in .env to fix pairing.",
+                    host,
+                )
+                self._update_splash_status(
+                    "Server unreachable — set PLATFORM_URL in .env",
+                    is_error=True,
+                )
 
         print(f"Display ID: {self.display_id}")
         print(f"Display Name: {self.config.display_name}")

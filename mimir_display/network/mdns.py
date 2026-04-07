@@ -1,16 +1,83 @@
 """
 mDNS service management for device discovery.
 
-This module handles mDNS service broadcasting to make the display
-discoverable on the local network for automatic platform integration.
+This module handles:
+  - mDNS service broadcasting so the server can discover displays
+  - mDNS server discovery so displays can find the Mimir server
+    without needing PLATFORM_URL set in .env
 """
 
 # mimir_display/network/mdns.py
-import socket, ipaddress
+import asyncio
+import socket
+import ipaddress
 from datetime import datetime, timezone
 from typing import Optional
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
+
+MIMIR_SERVER_SERVICE_TYPE = "_mimir._tcp.local."
+
+
+def _sync_discover_mimir_server(timeout: float) -> Optional[str]:
+    """Blocking scan for _mimir._tcp.local. — run this in a thread."""
+    import threading
+    from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+
+    result: list[Optional[str]] = [None]
+    found = threading.Event()
+
+    class _Listener(ServiceListener):
+        def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+            info = zc.get_service_info(service_type, name, timeout=1000)
+            if not info or not info.addresses:
+                return
+            addrs = [
+                socket.inet_ntoa(a)
+                for a in info.addresses
+                if len(a) == 4 and not socket.inet_ntoa(a).startswith("127.")
+            ]
+            if addrs:
+                result[0] = f"http://{addrs[0]}:{info.port}"
+                found.set()
+
+        def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+            self.add_service(zc, service_type, name)
+
+        def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+            pass
+
+    zc = Zeroconf()
+    browser = ServiceBrowser(zc, MIMIR_SERVER_SERVICE_TYPE, _Listener())
+    found.wait(timeout=timeout)
+    try:
+        browser.cancel()
+    except Exception:
+        pass
+    try:
+        zc.close()
+    except Exception:
+        pass
+    return result[0]
+
+
+async def discover_mimir_server(timeout: float = 5.0) -> Optional[str]:
+    """Browse mDNS for a Mimir server advertisement.
+
+    Returns the server base URL (e.g. 'http://192.168.1.50:5000') if found
+    within *timeout* seconds, or None if no server is found.
+
+    The server must be advertising _mimir._tcp.local. — this is done
+    automatically by the mimir-discovery sidecar when it runs.
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        return await asyncio.wait_for(
+            loop.run_in_executor(None, _sync_discover_mimir_server, timeout),
+            timeout=timeout + 2,
+        )
+    except (asyncio.TimeoutError, Exception):
+        return None
 
 class MDNSService:
     def __init__(self, display_client):

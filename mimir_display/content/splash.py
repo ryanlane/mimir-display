@@ -315,6 +315,39 @@ def _layout_portrait(
     _draw_text_centered(draw, W // 2, y, "IP: " + ip, small_font, _GRAY)
 
 
+def overlay_status(
+    splash_path: str,
+    status_text: str,
+    is_error: bool = False,
+) -> Optional[Image.Image]:
+    """
+    Load an existing splash image and overlay a status banner at the bottom.
+
+    Args:
+        splash_path: Path to the existing splash PNG.
+        status_text: Short message to display in the banner.
+        is_error:    If True, use a red banner; otherwise green.
+
+    Returns:
+        Updated PIL Image, or None if the file cannot be read.
+    """
+    try:
+        img = Image.open(splash_path).convert("RGB")
+    except Exception:
+        return None
+
+    W, H = img.size
+    draw = ImageDraw.Draw(img)
+    small_fs = max(8, min(W, H) // 28)
+    font = _load_font(small_fs, bold=False)
+
+    banner_h = small_fs + 12
+    banner_color = (180, 40, 40) if is_error else (30, 110, 50)
+    draw.rectangle([(0, H - banner_h), (W, H)], fill=banner_color)
+    _draw_text_centered(draw, W // 2, H - banner_h + 6, status_text, font, (255, 255, 255))
+    return img
+
+
 def _layout_square(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
