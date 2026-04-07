@@ -72,6 +72,13 @@ class MqttDisplayClientManager:
         # Get hardware capabilities (after stable id set)
         self.capabilities = get_display_capabilities()
 
+        # Load server-assigned config persisted from a previous pairing/finalize.
+        # Only overrides values the user has NOT explicitly set in .env (empty string
+        # or default sentinel) so the operator can always override locally.
+        from mimir_display.storage.device_config import DeviceConfig
+        self.device_config = DeviceConfig()
+        self._apply_device_config()
+
         # Generate a pairing code and store it for MQTT publishing after connection.
         # The code is generated locally so it can appear on the splash before MQTT starts.
         self.pair_code: str = generate_pair_code()
@@ -231,6 +238,45 @@ class MqttDisplayClientManager:
                 "fallback": "default_content"
             }
 
+
+    def _apply_device_config(self) -> None:
+        """Apply server-assigned config from device_config.json.
+
+        Only sets a value when the user has NOT explicitly configured it via
+        .env — i.e. when the live config value is still the code default.
+        .env always wins; this just fills in gaps for freshly-flashed devices.
+        """
+        dc = self.device_config
+        if not dc.is_configured:
+            return
+
+        # (value, env var name, config key, default sentinel)
+        candidates = [
+            (dc.platform_url,     "PLATFORM_URL",       "platform_url",      "http://localhost:5000"),
+            (dc.display_name,     "DISPLAY_NAME",       "display_name",      "Inky Display"),
+            (dc.display_location, "DISPLAY_LOCATION",   "display_location",  "Unknown"),
+            (dc.mqtt_host,        "MQTT_BROKER_HOST",   "mqtt_broker_host",  "localhost"),
+            (dc.mqtt_password,    "MQTT_PASSWORD",      "mqtt_password",     None),
+            (dc.mqtt_username,    "MQTT_USERNAME",      "mqtt_username",     None),
+        ]
+        for stored_val, env_key, cfg_key, default in candidates:
+            if stored_val is None:
+                continue
+            # If the operator set this env var explicitly, respect it
+            if os.environ.get(env_key):
+                continue
+            # If current config is the default sentinel, override with stored value
+            current = self.config.get(cfg_key)
+            if current in (default, None, ""):
+                self.config.set(cfg_key, stored_val)
+                safe = "***" if "password" in cfg_key else stored_val
+                self.logger.info("device_config: applied %s=%s", cfg_key, safe)
+
+        # Port is an int — handle separately
+        if dc.mqtt_port and not os.environ.get("MQTT_BROKER_PORT"):
+            if self.config.get("mqtt_broker_port") == 1883:
+                self.config.set("mqtt_broker_port", dc.mqtt_port)
+                self.logger.info("device_config: applied mqtt_broker_port=%d", dc.mqtt_port)
 
     def _display_default(self):
         """Display default content."""

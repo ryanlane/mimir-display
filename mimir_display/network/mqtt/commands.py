@@ -408,7 +408,7 @@ class MqttCommandHandler:
             "Received finalize_registration display_id=%s", display_id
         )
 
-        # Persist registration state using the registration manager if available
+        # Persist registration state
         if hasattr(self, "_registration") and self._registration is not None:
             try:
                 self._registration.update_registration(
@@ -416,11 +416,17 @@ class MqttCommandHandler:
                     assigned_id=display_id or self.topics.device_id,
                     service_config={"registration_key": registration_key} if registration_key else {},
                 )
-                self.logger.info(
-                    "Registration state persisted for display_id=%s", display_id
-                )
+                self.logger.info("Registration state persisted for display_id=%s", display_id)
             except Exception as e:
                 self.logger.warning("Could not persist registration state: %s", e)
+
+        # Persist server-assigned config (platform URL, MQTT details, name, location)
+        try:
+            from mimir_display.storage.device_config import DeviceConfig
+            dc = DeviceConfig()
+            dc.apply_finalize_payload(command)
+        except Exception as e:
+            self.logger.warning("Could not persist device config: %s", e)
 
         # Notify via ack
         if self._event_publisher:
