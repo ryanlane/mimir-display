@@ -548,57 +548,70 @@ class MqttDisplayClientManager:
         except Exception as e:
             self.logger.warning("Error stopping services: %s", e)
 
+    def _has_valid_mqtt_host(self) -> bool:
+        host = (self.config.mqtt_broker_host or "").strip()
+        return host not in ("", "localhost", "127.0.0.1")
+
+    async def _discover_platform_via_mdns(self) -> bool:
+        self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 10s)…")
+        self._update_splash_status("Searching for Mimir server…")
+        mdns_url = await discover_mimir_server(timeout=10.0)
+        if not mdns_url:
+            return False
+
+        self.config.set("platform_url", mdns_url)
+        self.logger.info("Mimir server discovered via mDNS: %s", mdns_url)
+        self._render_startup_splash(status_text="Found Mimir server — fetching setup…")
+        self.state["platform_url_override"] = mdns_url
+        self._save_state()
+        return True
+
+    async def _wait_for_bootstrap_config(self) -> bool:
+        while not self.stop_event.is_set():
+            platform_url = (self.config.platform_url or "").strip()
+            if not platform_url:
+                discovered = await self._discover_platform_via_mdns()
+                if not discovered:
+                    self.logger.warning(
+                        "No Mimir server found via mDNS. Waiting for manual PLATFORM_URL or bootstrap webhook."
+                    )
+                    self._update_splash_status(
+                        "No Mimir server found — enable mDNS or set PLATFORM_URL",
+                        is_error=True,
+                    )
+                    await asyncio.sleep(10)
+                    continue
+
+            bootstrap_ok = await self._refresh_mqtt_config(initial=True)
+            if bootstrap_ok or self._has_valid_mqtt_host():
+                return True
+
+            self.logger.warning(
+                "MQTT bootstrap config not available yet — waiting for server config. platform_url=%s mqtt_host=%s",
+                self.config.platform_url or "(unset)",
+                self.config.mqtt_broker_host or "(unset)",
+            )
+            self._update_splash_status(
+                "Waiting for server setup — retrying bootstrap…",
+                is_error=True,
+            )
+            await asyncio.sleep(10)
+
+        return False
+
     async def discovery_mode_loop(self):
         """Run in discovery-only mode with MQTT presence."""
         self.logger.info("Starting discovery mode with MQTT presence")
 
         self._loop = asyncio.get_running_loop()
 
-        # ── mDNS server discovery ─────────────────────────────────────────────
-        # If PLATFORM_URL was not explicitly set by the operator, try to find the
-        # Mimir server via mDNS first.
-        # The mimir-discovery sidecar advertises _mimir._tcp.local. from the host
-        # network, so this works without any pre-configuration on the display.
-        explicit_platform = os.environ.get("PLATFORM_URL", "").strip()
-        platform_is_default = not explicit_platform or explicit_platform in (
-            "http://localhost:5000", "localhost:5000",
-        )
-        if platform_is_default:
-            self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 10s)…")
-            self._update_splash_status("Searching for Mimir server…")
-            mdns_url = await discover_mimir_server(timeout=10.0)
-            if mdns_url:
-                self.config.set("platform_url", mdns_url)
-                self.logger.info("Mimir server discovered via mDNS: %s", mdns_url)
-                self._render_startup_splash(status_text="Found Mimir server — fetching setup…")
-                # Persist to state so next boot doesn't need mDNS scan
-                self.state["platform_url_override"] = mdns_url
-                self._save_state()
-            else:
-                self.logger.warning(
-                    "No Mimir server found via mDNS. "
-                    "Is the mimir-discovery sidecar running? "
-                    "Waiting for manual PLATFORM_URL or bootstrap webhook. MQTT host=%s.",
-                    self.config.mqtt_broker_host or "(unset)",
-                )
-                self._update_splash_status(
-                    "No Mimir server found — enable mDNS or set PLATFORM_URL",
-                    is_error=True,
-                )
+        # Start services (mDNS for discovery, webhook for manual triggers)
+        await self.start_services()
 
-        # ── HTTP bootstrap for MQTT config ────────────────────────────────────
-        bootstrap_ok = await self._refresh_mqtt_config(initial=True)
-        if not bootstrap_ok:
-            host = self.config.mqtt_broker_host or ""
-            if host in ("", "localhost", "127.0.0.1"):
-                self.logger.warning(
-                    "MQTT bootstrap config not available — mDNS bootstrap did not complete and MQTT host is unset/loopback. "
-                    "Set PLATFORM_URL=http://<server-ip>:5000 in .env or run mDNS discovery on the host.",
-                )
-                self._update_splash_status(
-                    "Bootstrap failed — set PLATFORM_URL or enable mDNS",
-                    is_error=True,
-                )
+        bootstrap_ready = await self._wait_for_bootstrap_config()
+        if not bootstrap_ready:
+            self.logger.info("Stopping discovery mode before MQTT startup because bootstrap never completed")
+            return
 
         print(f"Display ID: {self.display_id}")
         print(f"Display Name: {self.config.display_name}")
@@ -606,9 +619,6 @@ class MqttDisplayClientManager:
         print(f"Hostname: {self.config.hostname}")
         print(f"Resolution: {self.capabilities['resolution']}")
         print(f"MQTT Broker: {self.config.mqtt_broker_host}:{self.config.mqtt_broker_port}")
-
-        # Start services (mDNS for discovery, webhook for manual triggers)
-        await self.start_services()
 
         # Start MQTT config polling (optional)
         if self.config.get("mqtt_config_enabled", True):
