@@ -1,0 +1,17 @@
+[Unit]
+Description=Mimir Display Client — scheduled code update
+Requires=mimir-display-updater.service
+
+[Timer]
+# Run once shortly after boot (gives network time to settle)
+OnBootSec=2min
+# Then check every 6 hours
+OnUnitActiveSec=6h
+# Spread the check over a random 5-minute window so multiple
+# devices don't all hit git at exactly the same moment
+RandomizedDelaySec=5min
+Unit=mimir-display-updater.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

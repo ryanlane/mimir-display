@@ -1,0 +1,18 @@
+[Unit]
+Description=Mimir Display Client — code update
+After=network-online.target
+Wants=network-online.target
+# Only run when the main service is installed (not necessarily running)
+ConditionPathExists=/opt/mimir-display/scripts/pull_and_update.sh
+
+[Service]
+Type=oneshot
+User=root
+# Resolve the repo / install root — adjust if using a non-standard prefix
+Environment=INSTALL_DIR=/opt/mimir-display
+Environment=SERVICE_NAME=mimir-display
+# Set this if the code lives in a separate git checkout from the install dir
+# Environment=MIMIR_REPO_DIR=/opt/mimir-display
+ExecStart=/bin/bash /opt/mimir-display/scripts/pull_and_update.sh
+StandardOutput=journal
+StandardError=journal

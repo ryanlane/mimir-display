@@ -90,6 +90,29 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b'{"status": "config_applied"}')
 
+            elif path == 'update-client':
+                raw = self.rfile.read(int(self.headers.get('Content-Length', 0)) or 0)
+                body = json.loads(raw.decode('utf-8')) if raw else {}
+                branch = str(body.get('branch', 'main'))
+                dry_run = bool(body.get('dry_run', False))
+
+                from mimir_display.utils.update import trigger_update
+                pid = trigger_update(
+                    git_branch=branch,
+                    dry_run=dry_run,
+                    log=self.display_client.logger,
+                )
+
+                self.send_response(200 if pid else 503)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                resp = (
+                    json.dumps({"status": "update_triggered", "pid": pid}).encode()
+                    if pid
+                    else b'{"status": "error", "detail": "update script not found"}'
+                )
+                self.wfile.write(resp)
+
             else:
                 self.send_error(404, "Endpoint not found")
                 
@@ -173,13 +196,18 @@ class WebhookServer:
             
             self.logger.info("Webhook server started on port %d", self.port)
             self.logger.info("Manual update endpoints:")
-            self.logger.info("  POST /update  - Trigger immediate content check")
-            self.logger.info("  POST /refresh - Force refresh current content")
-            self.logger.info("  GET  /status  - Get display status")
+            self.logger.info("  POST /update         - Trigger immediate content check")
+            self.logger.info("  POST /refresh        - Force refresh current content")
+            self.logger.info("  POST /update-client  - git pull + reinstall + restart")
+            self.logger.info("  GET  /status         - Get display status")
             
         except Exception as e:
             self.logger.warning("Failed to start webhook server: %s", e)
     
+    def is_running(self) -> bool:
+        """Return True if the server thread is alive."""
+        return self.thread is not None and self.thread.is_alive()
+
     def stop(self):
         """Stop the webhook server."""
         try:

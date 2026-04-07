@@ -157,8 +157,24 @@ install_service() {
   cp "$SERVICE_FILE_SOURCE" "$SERVICE_FILE_TARGET"
   chown root:root "$SERVICE_FILE_TARGET"
   chmod 0644 "$SERVICE_FILE_TARGET"
+
+  # Install the auto-updater timer if the packaging files are present
+  local timer_svc="packaging/mimir-display-updater.service"
+  local timer_tmr="packaging/mimir-display-updater.timer"
+  if [[ -f "$timer_svc" && -f "$timer_tmr" ]]; then
+    install -m 0644 "$timer_svc" /etc/systemd/system/mimir-display-updater.service
+    install -m 0644 "$timer_tmr" /etc/systemd/system/mimir-display-updater.timer
+    info "Auto-updater timer installed"
+  else
+    warn "Auto-updater timer files not found; skipping (run update manually)"
+  fi
+
   systemctl daemon-reload
   systemctl enable mimir-display.service
+  if systemctl list-unit-files mimir-display-updater.timer >/dev/null 2>&1; then
+    systemctl enable --now mimir-display-updater.timer
+    info "Auto-updater timer enabled"
+  fi
 }
 
 place_env() {

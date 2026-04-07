@@ -58,6 +58,7 @@ class MqttCommandHandler:
         self.register_handler("ready", self._handle_ready)
         self.register_handler("registration_complete", self._handle_registration_complete)
         self.register_handler("finalize_registration", self._handle_finalize_registration)
+        self.register_handler("update_client", self._handle_update_client)
         self.register_handler("display_image", self._handle_display_image)
         self.register_handler("set_scene", self._handle_set_scene)
         self.register_handler("clear_scene", self._handle_clear_scene)
@@ -427,6 +428,42 @@ class MqttCommandHandler:
                 assignment_id=command.get("assignment_id", "finalize_registration"),
                 success=True,
                 message=f"Pairing complete — display_id={display_id}",
+            )
+
+    async def _handle_update_client(self, command: dict[str, Any]):
+        """Handle update_client command sent from the server.
+
+        Triggers pull_and_update.sh in a detached subprocess so the service
+        can restart itself without losing the MQTT ack.
+
+        Command payload (all optional):
+            branch   str   git branch to pull (default: "main")
+            dry_run  bool  pass DRY_RUN=1 to the script (default: false)
+        """
+        assignment_id = command.get("assignment_id", "update_client")
+        branch = str(command.get("branch", "main"))
+        dry_run = bool(command.get("dry_run", False))
+
+        self.logger.info(
+            "Received update_client command branch=%s dry_run=%s", branch, dry_run
+        )
+
+        # ACK immediately so the server sees confirmation before the service restarts
+        if self._event_publisher:
+            await self._event_publisher.publish_ack(
+                assignment_id=assignment_id,
+                success=True,
+                message=f"Update triggered (branch={branch})",
+            )
+
+        from mimir_display.utils.update import trigger_update
+        pid = trigger_update(git_branch=branch, dry_run=dry_run, log=self.logger)
+        if pid:
+            self.logger.info("Update script launched (pid=%d)", pid)
+        else:
+            self.logger.warning(
+                "update_client: could not locate update script — "
+                "set MIMIR_REPO_DIR to the git checkout root"
             )
 
     # ---------------------------------------------------------------------
