@@ -83,40 +83,13 @@ class MqttDisplayClientManager:
         # The code is generated locally so it can appear on the splash before MQTT starts.
         self.pair_code: str = generate_pair_code()
         self.pair_code_published: bool = False
+        self._current_splash_status = ""
 
         # Build and display the dynamic startup splash screen:
         #   logo + QR code + 6-char pairing code + IP address
         self._splash_path: Optional[str] = None
-        try:
-            logo_path = (
-                os.environ.get("STARTUP_LOGO_PATH")
-                or os.path.join(os.path.dirname(__file__), "images", "startup.png")
-            )
-            res = self.capabilities.get("resolution") or [800, 480]
-            splash_w, splash_h = int(res[0]), int(res[1])
-
-            splash_img = build_splash(
-                width=splash_w,
-                height=splash_h,
-                pair_code=self.pair_code,
-                platform_url=self.config.platform_url,
-                ip_address=get_local_ip(),
-                logo_path=logo_path if os.path.exists(logo_path) else None,
-            )
-
-            splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
-            os.makedirs(os.path.dirname(splash_path), exist_ok=True)
-            splash_img.save(splash_path, format="PNG")
-            self._splash_path = splash_path
-
-            tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
-            tmp_dm.display_from_file(splash_path)
-            self.logger.info(
-                "Startup splash displayed (pair_code=%s, size=%dx%d)",
-                self.pair_code, splash_w, splash_h,
-            )
-        except Exception as e:  # noqa: BLE001 - non-fatal
-            self.logger.debug("Startup splash failed: %s", e, exc_info=True)
+        initial_status = "Searching for Mimir server..." if not self.config.platform_url else ""
+        self._render_startup_splash(status_text=initial_status)
 
         # Optional startup test pattern for non e-ink framebuffer displays.
         # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
@@ -253,6 +226,7 @@ class MqttDisplayClientManager:
         if not self._splash_path or not os.path.exists(self._splash_path):
             return
         try:
+            self._current_splash_status = text
             updated = overlay_status(self._splash_path, text, is_error=is_error)
             if updated is None:
                 return
@@ -261,6 +235,42 @@ class MqttDisplayClientManager:
             dm.display_from_file(self._splash_path)
         except Exception as e:  # noqa: BLE001
             self.logger.debug("Failed to update splash status: %s", e)
+
+    def _render_startup_splash(self, status_text: str = "") -> None:
+        try:
+            logo_path = (
+                os.environ.get("STARTUP_LOGO_PATH")
+                or os.path.join(os.path.dirname(__file__), "images", "startup.png")
+            )
+            res = self.capabilities.get("resolution") or [800, 480]
+            splash_w, splash_h = int(res[0]), int(res[1])
+            splash_img = build_splash(
+                width=splash_w,
+                height=splash_h,
+                pair_code=self.pair_code,
+                platform_url=self.config.platform_url or None,
+                ip_address=get_local_ip(),
+                logo_path=logo_path if os.path.exists(logo_path) else None,
+                status_text=status_text,
+            )
+
+            splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
+            os.makedirs(os.path.dirname(splash_path), exist_ok=True)
+            splash_img.save(splash_path, format="PNG")
+            self._splash_path = splash_path
+            self._current_splash_status = status_text
+
+            tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
+            tmp_dm.display_from_file(splash_path)
+            self.logger.info(
+                "Startup splash displayed (pair_code=%s, size=%dx%d, platform_url=%s)",
+                self.pair_code,
+                splash_w,
+                splash_h,
+                self.config.platform_url or "(unset)",
+            )
+        except Exception as e:  # noqa: BLE001 - non-fatal
+            self.logger.debug("Startup splash failed: %s", e, exc_info=True)
 
     def _handle_pair_status(self, status: str, payload: Dict[str, Any]) -> None:
         """Reflect pair-code readiness on the splash screen."""
@@ -285,10 +295,10 @@ class MqttDisplayClientManager:
 
         # (value, env var name, config key, default sentinel)
         candidates = [
-            (dc.platform_url,     "PLATFORM_URL",       "platform_url",      "http://localhost:5000"),
+            (dc.platform_url,     "PLATFORM_URL",       "platform_url",      ""),
             (dc.display_name,     "DISPLAY_NAME",       "display_name",      "Inky Display"),
             (dc.display_location, "DISPLAY_LOCATION",   "display_location",  "Unknown"),
-            (dc.mqtt_host,        "MQTT_BROKER_HOST",   "mqtt_broker_host",  "localhost"),
+            (dc.mqtt_host,        "MQTT_BROKER_HOST",   "mqtt_broker_host",  ""),
             (dc.mqtt_password,    "MQTT_PASSWORD",      "mqtt_password",     None),
             (dc.mqtt_username,    "MQTT_USERNAME",      "mqtt_username",     None),
         ]
@@ -356,6 +366,8 @@ class MqttDisplayClientManager:
         if explicit:
             return explicit
         base = (self.config.platform_url or "").rstrip("/")
+        if not base:
+            return ""
         endpoint = self.config.get("mqtt_config_endpoint", "/api/displays/mqtt/config")
         if not endpoint.startswith("/"):
             endpoint = f"/{endpoint}"
@@ -429,6 +441,7 @@ class MqttDisplayClientManager:
                 self.config.mqtt_broker_host,
                 self.config.mqtt_broker_port,
             )
+            self._render_startup_splash(status_text=self._current_splash_status)
             await self.mqtt_client.request_reconnect("api_config_update")
         return changed
 
@@ -471,6 +484,7 @@ class MqttDisplayClientManager:
                 self.config.mqtt_broker_host,
                 self.config.mqtt_broker_port,
             )
+            self._render_startup_splash(status_text=self._current_splash_status)
             await self.mqtt_client.request_reconnect("bootstrap_config")
 
     def apply_bootstrap_config(self, payload: Dict[str, Any]) -> None:
@@ -541,8 +555,8 @@ class MqttDisplayClientManager:
         self._loop = asyncio.get_running_loop()
 
         # ── mDNS server discovery ─────────────────────────────────────────────
-        # If PLATFORM_URL was not explicitly set by the operator (i.e. it's still
-        # the default localhost value), try to find the Mimir server via mDNS.
+        # If PLATFORM_URL was not explicitly set by the operator, try to find the
+        # Mimir server via mDNS first.
         # The mimir-discovery sidecar advertises _mimir._tcp.local. from the host
         # network, so this works without any pre-configuration on the display.
         explicit_platform = os.environ.get("PLATFORM_URL", "").strip()
@@ -550,13 +564,13 @@ class MqttDisplayClientManager:
             "http://localhost:5000", "localhost:5000",
         )
         if platform_is_default:
-            self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 5s)…")
+            self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 10s)…")
             self._update_splash_status("Searching for Mimir server…")
-            mdns_url = await discover_mimir_server(timeout=5.0)
+            mdns_url = await discover_mimir_server(timeout=10.0)
             if mdns_url:
                 self.config.set("platform_url", mdns_url)
                 self.logger.info("Mimir server discovered via mDNS: %s", mdns_url)
-                self._update_splash_status(f"Found server: {mdns_url}")
+                self._render_startup_splash(status_text="Found Mimir server — fetching setup…")
                 # Persist to state so next boot doesn't need mDNS scan
                 self.state["platform_url_override"] = mdns_url
                 self._save_state()
@@ -564,23 +578,25 @@ class MqttDisplayClientManager:
                 self.logger.warning(
                     "No Mimir server found via mDNS. "
                     "Is the mimir-discovery sidecar running? "
-                    "Falling back to MQTT_BROKER_HOST=%s.",
-                    self.config.mqtt_broker_host or "localhost",
+                    "Waiting for manual PLATFORM_URL or bootstrap webhook. MQTT host=%s.",
+                    self.config.mqtt_broker_host or "(unset)",
+                )
+                self._update_splash_status(
+                    "No Mimir server found — enable mDNS or set PLATFORM_URL",
+                    is_error=True,
                 )
 
         # ── HTTP bootstrap for MQTT config ────────────────────────────────────
         bootstrap_ok = await self._refresh_mqtt_config(initial=True)
         if not bootstrap_ok:
-            host = self.config.mqtt_broker_host or "localhost"
-            if host in ("localhost", "127.0.0.1"):
+            host = self.config.mqtt_broker_host or ""
+            if host in ("", "localhost", "127.0.0.1"):
                 self.logger.warning(
-                    "MQTT bootstrap config not available — PLATFORM_URL may not be set. "
-                    "Trying MQTT_BROKER_HOST=%s (likely wrong for remote devices). "
-                    "Set PLATFORM_URL=http://<server-ip>:5000 in .env to fix pairing.",
-                    host,
+                    "MQTT bootstrap config not available — mDNS bootstrap did not complete and MQTT host is unset/loopback. "
+                    "Set PLATFORM_URL=http://<server-ip>:5000 in .env or run mDNS discovery on the host.",
                 )
                 self._update_splash_status(
-                    "Server unreachable — set PLATFORM_URL in .env",
+                    "Bootstrap failed — set PLATFORM_URL or enable mDNS",
                     is_error=True,
                 )
 

@@ -412,8 +412,8 @@ fi
 set_env_value "$ENV_FILE" "DISPLAY_BACKEND" "${BACKEND:-auto}"
 if ! grep -q '^LOG_LEVEL=' "$ENV_FILE"; then echo "LOG_LEVEL=INFO" >>"$ENV_FILE"; fi
 
-cur_platform_url="$(read_env_value "$ENV_FILE" "PLATFORM_URL")"; cur_platform_url=${cur_platform_url:-http://localhost:5000}
-cur_mqtt_host="$(read_env_value "$ENV_FILE" "MQTT_BROKER_HOST")"; cur_mqtt_host=${cur_mqtt_host:-localhost}
+cur_platform_url="$(read_env_value "$ENV_FILE" "PLATFORM_URL")"; cur_platform_url=${cur_platform_url:-}
+cur_mqtt_host="$(read_env_value "$ENV_FILE" "MQTT_BROKER_HOST")"; cur_mqtt_host=${cur_mqtt_host:-}
 orientation_default="landscape"
 
 if (( AUTO_YES == 1 || TTY == 0 )); then
@@ -421,9 +421,9 @@ if (( AUTO_YES == 1 || TTY == 0 )); then
   set_env_value "$ENV_FILE" "MQTT_BROKER_HOST" "$cur_mqtt_host"
   set_env_value "$ENV_FILE" "DISPLAY_ORIENTATION" "$orientation_default"
 else
-  read -rp "Platform URL [${cur_platform_url}]: " INPUT_PLATFORM_URL; INPUT_PLATFORM_URL=${INPUT_PLATFORM_URL:-$cur_platform_url}
+  read -rp "Platform URL [${cur_platform_url:-leave blank for mDNS bootstrap}]: " INPUT_PLATFORM_URL; INPUT_PLATFORM_URL=${INPUT_PLATFORM_URL:-$cur_platform_url}
   set_env_value "$ENV_FILE" "PLATFORM_URL" "$INPUT_PLATFORM_URL"
-  read -rp "MQTT broker host [${cur_mqtt_host}]: " INPUT_MQTT_HOST; INPUT_MQTT_HOST=${INPUT_MQTT_HOST:-$cur_mqtt_host}
+  read -rp "MQTT broker host [${cur_mqtt_host:-leave blank to fetch from server}]: " INPUT_MQTT_HOST; INPUT_MQTT_HOST=${INPUT_MQTT_HOST:-$cur_mqtt_host}
   set_env_value "$ENV_FILE" "MQTT_BROKER_HOST" "$INPUT_MQTT_HOST"
   read -rp "Display orientation (landscape|portrait_left|portrait_right) [landscape]: " ORIENTATION_INPUT; ORIENTATION_INPUT=${ORIENTATION_INPUT:-landscape}
   case "$ORIENTATION_INPUT" in

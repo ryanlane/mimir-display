@@ -59,7 +59,7 @@ def build_splash(
     width: int,
     height: int,
     pair_code: str,
-    platform_url: str,
+    platform_url: str | None,
     ip_address: str,
     logo_path: Optional[str] = None,
     status_text: str = "",
@@ -79,7 +79,7 @@ def build_splash(
     Returns:
         RGB PIL Image ready to be saved and passed to DisplayManager.
     """
-    pair_url = f"{platform_url.rstrip('/')}/displays?pair={pair_code}"
+    pair_url = f"{platform_url.rstrip('/')}/displays?pair={pair_code}" if platform_url else None
 
     canvas = Image.new("RGB", (width, height), _BG)
     draw = ImageDraw.Draw(canvas)
@@ -172,7 +172,7 @@ def _load_logo(
 
 
 def _make_qr_image(
-    url: str,
+    url: str | None,
     W: int, H: int,
     is_portrait: bool, is_square: bool,
     pad: int,
@@ -186,6 +186,17 @@ def _make_qr_image(
 
     target = max(80, target)
     box_size = max(2, target // 25)
+
+    if not url:
+        qr_pil = Image.new("RGB", (target, target), (240, 240, 244))
+        d = ImageDraw.Draw(qr_pil)
+        font = _load_font(max(10, target // 9), bold=False)
+        lines = ["Searching", "for", "Mimir..."]
+        line_height = max(12, target // 9)
+        start_y = target // 2 - (len(lines) * line_height) // 2
+        for index, line in enumerate(lines):
+            _draw_text_centered(d, target // 2, start_y + index * line_height, line, font, _GRAY)
+        return qr_pil
 
     try:
         import qrcode  # type: ignore

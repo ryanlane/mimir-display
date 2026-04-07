@@ -50,6 +50,10 @@ It updates the display `.env` (or `/etc/mimir-display/.env` on installed systems
 - optional `MQTT_USERNAME` / `MQTT_PASSWORD`
 - optional `DISPLAY_NAME` / `DISPLAY_LOCATION`
 
+For normal first-boot onboarding on a Linux server, leave `PLATFORM_URL` and
+`MQTT_BROKER_HOST` blank and let the display discover Mimir via mDNS. Only use
+manual service connection values when mDNS bootstrap is unavailable.
+
 After saving, restart the service:
 
 ```bash

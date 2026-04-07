@@ -39,7 +39,7 @@ class Config:
     def _load_base_config(self) -> Dict[str, Any]:
         """Load base configuration from environment variables."""
         return {
-            "platform_url": os.getenv("PLATFORM_URL", "http://localhost:5000"),
+            "platform_url": os.getenv("PLATFORM_URL", "").strip(),
             "display_id": os.getenv("DISPLAY_ID", ""),  # Empty means use hostname
             "display_name": os.getenv("DISPLAY_NAME", "Inky Display"),
             "display_location": os.getenv("DISPLAY_LOCATION", "Unknown"),
@@ -59,7 +59,7 @@ class Config:
             "webhook_enabled": env_str("WEBHOOK_ENABLED", "true").lower() == "true",
             
             # MQTT configuration
-            "mqtt_broker_host": os.getenv("MQTT_BROKER_HOST", "localhost"),
+            "mqtt_broker_host": os.getenv("MQTT_BROKER_HOST", "").strip(),
             "mqtt_broker_port": env_int("MQTT_BROKER_PORT", 1883),
             "mqtt_username": os.getenv("MQTT_USERNAME"),
             "mqtt_password": os.getenv("MQTT_PASSWORD"),
