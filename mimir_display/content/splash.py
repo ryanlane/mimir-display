@@ -63,6 +63,7 @@ def build_splash(
     ip_address: str,
     logo_path: Optional[str] = None,
     status_text: str = "",
+    qr_url: Optional[str] = None,
 ) -> Image.Image:
     """
     Compose and return a startup splash PIL Image.
@@ -75,11 +76,17 @@ def build_splash(
         ip_address:   IP address string to display.
         logo_path:    Optional path to the logo PNG/JPEG.
         status_text:  Optional initial status line text.
+        qr_url:       Explicit URL to encode in the QR code. When provided this
+                      takes precedence over the pair-code URL derived from
+                      platform_url. Use this for provisioning / setup flows.
 
     Returns:
         RGB PIL Image ready to be saved and passed to DisplayManager.
     """
-    pair_url = f"{platform_url.rstrip('/')}/displays?pair={pair_code}" if platform_url else None
+    if qr_url is not None:
+        pair_url = qr_url
+    else:
+        pair_url = f"{platform_url.rstrip('/')}/displays?pair={pair_code}" if platform_url else None
 
     canvas = Image.new("RGB", (width, height), _BG)
     draw = ImageDraw.Draw(canvas)

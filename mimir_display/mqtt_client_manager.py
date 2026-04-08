@@ -18,6 +18,7 @@ from .config import Config
 import re
 from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService, discover_mimir_server
+from .network.provisioning_server import start_provisioning_server
 from .content import ImageCache, DisplayManager
 from .content.splash import build_splash, generate_pair_code, get_local_ip, overlay_status
 from .hardware import get_display_capabilities
@@ -84,12 +85,36 @@ class MqttDisplayClientManager:
         self.pair_code: str = generate_pair_code()
         self.pair_code_published: bool = False
         self._current_splash_status = ""
+        self._provision_server = None
 
-        # Build and display the dynamic startup splash screen:
-        #   logo + QR code + 6-char pairing code + IP address
+        # When the device has never been configured (no platform_url in .env or
+        # device_config.json), start the provisioning web server so the user can
+        # bootstrap it by scanning a QR code and pasting a provision bundle from
+        # the Mimir web UI — rather than having the display scan mDNS indefinitely.
         self._splash_path: Optional[str] = None
-        initial_status = "Searching for Mimir server..." if not self.config.platform_url else ""
-        self._render_startup_splash(status_text=initial_status)
+        local_ip = get_local_ip()
+        is_unconfigured = not self.config.platform_url and not self.device_config.is_configured
+
+        if is_unconfigured:
+            provision_port = int(os.environ.get("PROVISION_PORT", "7777"))
+            provision_url = f"http://{local_ip}:{provision_port}/setup"
+            self._render_startup_splash(
+                status_text=f"Visit {provision_url} to configure",
+                qr_url=provision_url,
+            )
+            try:
+                self._provision_server = start_provisioning_server(
+                    hostname=self.config.hostname,
+                    ip_address=local_ip,
+                    on_provisioned=self._apply_provision_bundle,
+                    port=provision_port,
+                )
+            except OSError:
+                self.logger.warning("Could not start provisioning server; falling back to mDNS scan")
+                self._render_startup_splash(status_text="Searching for Mimir server...")
+        else:
+            initial_status = "Searching for Mimir server..." if not self.config.platform_url else ""
+            self._render_startup_splash(status_text=initial_status)
 
         # Optional startup test pattern for non e-ink framebuffer displays.
         # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
@@ -236,7 +261,30 @@ class MqttDisplayClientManager:
         except Exception as e:  # noqa: BLE001
             self.logger.debug("Failed to update splash status: %s", e)
 
-    def _render_startup_splash(self, status_text: str = "") -> None:
+    def _apply_provision_bundle(self, bundle: dict) -> None:
+        """Write server config from a provision bundle and restart the client.
+
+        Called by the provisioning HTTP server when the user submits a valid bundle.
+        Writes device_config.json then exits; systemd restarts the service.
+        """
+        self.logger.info("Applying provision bundle: platform_url=%s mqtt_host=%s",
+                         bundle.get("platform_url"), bundle.get("mqtt_host"))
+        payload: dict = {
+            "config": {
+                "platform_url":  bundle.get("platform_url"),
+                "mqtt_host":     bundle.get("mqtt_host"),
+                "mqtt_port":     bundle.get("mqtt_port"),
+                "mqtt_username": bundle.get("mqtt_username"),
+                "mqtt_password": bundle.get("mqtt_password"),
+            }
+        }
+        self.device_config.apply_finalize_payload(payload)
+        self.logger.info("Provision bundle applied — restarting to activate config")
+        # Exit cleanly; systemd (Restart=on-failure / always) will restart the process.
+        import sys
+        sys.exit(0)
+
+    def _render_startup_splash(self, status_text: str = "", qr_url: Optional[str] = None) -> None:
         try:
             logo_path = (
                 os.environ.get("STARTUP_LOGO_PATH")
@@ -252,6 +300,7 @@ class MqttDisplayClientManager:
                 ip_address=get_local_ip(),
                 logo_path=logo_path if os.path.exists(logo_path) else None,
                 status_text=status_text,
+                qr_url=qr_url,
             )
 
             splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
