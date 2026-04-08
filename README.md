@@ -34,6 +34,39 @@ The script:
 7. (HyperPixel) Optionally appends overlay line to boot config
 8. Displays a startup logo on service launch (customizable via `STARTUP_LOGO_PATH`)
 
+## Task Runner
+
+All common operations are available via [Task](https://taskfile.dev). Install it once:
+
+```bash
+sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+```
+
+Run `task` in this directory to list all commands. Most-used:
+
+```bash
+# Local development
+task install                  # create .venv and install dependencies
+task install:pi               # on-device install with inky + qrcode extras
+task run                      # run the client locally
+task run:dev                  # run with DEBUG logging
+
+# Code quality
+task lint
+task format
+task test
+
+# Deploy to a physical display
+task deploy -- pi@colorframe05.local        # rsync + restart
+task deploy:dry -- pi@colorframe05.local    # preview changes without writing
+
+# Interact with a running display
+task logs    -- pi@colorframe05.local       # stream journald logs
+task status  -- pi@colorframe05.local       # systemctl status
+task restart -- pi@colorframe05.local       # restart the service
+task ssh     -- pi@colorframe05.local       # open a shell
+```
+
 ## Manual Service Connection Setup
 
 When automatic discovery or bootstrap is unavailable, use the interactive helper:
@@ -328,7 +361,14 @@ At startup the client will:
 2. Render a centered startup logo (`startup.png` or custom `STARTUP_LOGO_PATH`).
 
 ## Updating an Existing Installation
-Use the provided update script to deploy code changes and restart the service:
+
+The simplest path from your dev machine:
+
+```bash
+task deploy -- pi@colorframe05.local
+```
+
+This rsyncs the repo to `/opt/mimir-display` (preserving the device's `.env`) and runs `update_display.sh` remotely. If you're working directly on the device, run the script manually:
 
 ```bash
 scripts/update_display.sh                    # auto-detect install & restart

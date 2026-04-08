@@ -1,0 +1,145 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+version: "3"
+
+vars:
+  VENV: .venv
+  PYTHON: "{{.VENV}}/bin/python"
+  SERVICE: mimir-display
+
+tasks:
+
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  # ============================================================================
+  # SETUP
+  # ============================================================================
+
+  install:
+    desc: Create venv and install all dependencies
+    cmds:
+      - python3 -m venv {{.VENV}}
+      - "{{.PYTHON}} -m pip install --upgrade pip wheel setuptools"
+      - "{{.PYTHON}} -m pip install -e '.[dev]'"
+
+  install:pi:
+    desc: Install on a Raspberry Pi (includes inky + qrcode extras)
+    cmds:
+      - python3 -m venv {{.VENV}}
+      - "{{.PYTHON}} -m pip install --upgrade pip wheel setuptools"
+      - "{{.PYTHON}} -m pip install -e '.[inky,qrcode]'"
+
+  # ============================================================================
+  # RUN
+  # ============================================================================
+
+  run:
+    desc: Run the display client locally (uses .env if present)
+    cmds:
+      - "{{.PYTHON}} -m mimir_display"
+
+  run:dev:
+    desc: Run with debug logging
+    env:
+      LOG_LEVEL: DEBUG
+    cmds:
+      - "{{.PYTHON}} -m mimir_display"
+
+  # ============================================================================
+  # LINT / FORMAT / TEST
+  # ============================================================================
+
+  lint:
+    desc: Run ruff + mypy
+    cmds:
+      - "{{.VENV}}/bin/ruff check mimir_display/"
+      - "{{.VENV}}/bin/mypy mimir_display/"
+
+  format:
+    desc: Auto-format with ruff + black + isort
+    cmds:
+      - "{{.VENV}}/bin/ruff check --fix mimir_display/"
+      - "{{.VENV}}/bin/black mimir_display/"
+      - "{{.VENV}}/bin/isort mimir_display/"
+
+  test:
+    desc: Run the test suite
+    cmds:
+      - "{{.PYTHON}} -m pytest tests/"
+
+  test:verbose:
+    desc: Run tests with verbose output
+    cmds:
+      - "{{.PYTHON}} -m pytest tests/ -v"
+
+  # ============================================================================
+  # DEPLOY  — push code to a physical display
+  # ============================================================================
+
+  deploy:
+    desc: "Deploy to a display over SSH (usage: task deploy -- pi@colorframe05.local)"
+    summary: |
+      Rsyncs the repo to /opt/mimir-display on the target and runs update_display.sh.
+      Preserves the existing .env on the device.
+    cmds:
+      - |
+        TARGET={{.CLI_ARGS}}
+        if [ -z "$TARGET" ]; then echo "Usage: task deploy -- user@host"; exit 1; fi
+        echo "Deploying to $TARGET..."
+        rsync -az --exclude .venv --exclude __pycache__ --exclude .git --exclude .env \
+          ./ ${TARGET}:/opt/mimir-display/
+        ssh ${TARGET} "cd /opt/mimir-display && sudo bash scripts/update_display.sh"
+        echo "Deploy complete."
+
+  deploy:dry:
+    desc: "Dry-run deploy (shows what would change, no writes)"
+    cmds:
+      - |
+        TARGET={{.CLI_ARGS}}
+        if [ -z "$TARGET" ]; then echo "Usage: task deploy:dry -- user@host"; exit 1; fi
+        rsync -azn --exclude .venv --exclude __pycache__ --exclude .git --exclude .env \
+          ./ ${TARGET}:/opt/mimir-display/
+
+  # ============================================================================
+  # REMOTE  — interact with a running display
+  # ============================================================================
+
+  logs:
+    desc: "Stream logs from a display (usage: task logs -- pi@host)"
+    cmds:
+      - ssh {{.CLI_ARGS}} "journalctl -u {{.SERVICE}} -f"
+
+  status:
+    desc: "Show service status (usage: task status -- pi@host)"
+    cmds:
+      - ssh {{.CLI_ARGS}} "systemctl status {{.SERVICE}}"
+
+  restart:
+    desc: "Restart the service on a display (usage: task restart -- pi@host)"
+    cmds:
+      - ssh {{.CLI_ARGS}} "sudo systemctl restart {{.SERVICE}}"
+
+  ssh:
+    desc: "Open an SSH session (usage: task ssh -- pi@host)"
+    cmds:
+      - ssh {{.CLI_ARGS}}
+
+  # ============================================================================
+  # CLEAN
+  # ============================================================================
+
+  clean:
+    desc: Remove Python cache files
+    cmds:
+      - find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+      - find . -type f -name "*.pyc" -delete 2>/dev/null || true
+      - find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+
+  clean:all:
+    desc: Remove venv and all caches
+    prompt: This will delete the .venv. Continue?
+    cmds:
+      - task: clean
+      - rm -rf {{.VENV}}
