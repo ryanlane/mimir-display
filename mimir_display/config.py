@@ -57,11 +57,12 @@ class Config:
             # Network configuration
             "webhook_port": env_int("WEBHOOK_PORT", 8081),
             "webhook_enabled": env_str("WEBHOOK_ENABLED", "true").lower() == "true",
+            "provisioning_port": env_int("PROVISIONING_PORT", 7777),
+            "provisioning_enabled": env_str("PROVISIONING_ENABLED", "true").lower() == "true",
             
             # MQTT configuration
             "mqtt_broker_host": os.getenv("MQTT_BROKER_HOST", "").strip(),
             "mqtt_broker_port": env_int("MQTT_BROKER_PORT", 1883),
-            "mqtt_allow_local": env_str("MQTT_ALLOW_LOCAL", "false").lower() == "true",
             "mqtt_username": os.getenv("MQTT_USERNAME"),
             "mqtt_password": os.getenv("MQTT_PASSWORD"),
             "mqtt_heartbeat_interval": env_int("MQTT_HEARTBEAT_INTERVAL", 30),

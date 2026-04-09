@@ -18,6 +18,7 @@ from .config import Config
 import re
 from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService, discover_mimir_server
+from .network.provisioning_server import start_provisioning_server
 from .content import ImageCache, DisplayManager
 from .content.splash import build_splash, generate_pair_code, get_local_ip, overlay_status
 from .hardware import get_display_capabilities
@@ -64,6 +65,7 @@ class MqttDisplayClientManager:
             return s or "display"
         canonical_id = _slug(raw_host)
         if original_id and _slug(original_id) != canonical_id:
+            self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO")) if not hasattr(self, 'logger') else self.logger
             self.logger.info("Overriding display_id '%s' with hostname canonical '%s'", original_id, canonical_id)
         # Force config display_id to canonical hostname-based slug
         self.config.set('display_id', canonical_id)
@@ -134,6 +136,7 @@ class MqttDisplayClientManager:
 
         # Initialize network services
         self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
+        self.provisioning_server = None
         self.mdns_service = MDNSService(self)
 
         # State management
@@ -143,8 +146,6 @@ class MqttDisplayClientManager:
         self.force_refresh_flag = False
         self._mqtt_config_task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._shutting_down = False
-        self._shutdown_lock = asyncio.Lock()
 
         # Load persistent state
         self._load_state()
@@ -478,17 +479,8 @@ class MqttDisplayClientManager:
         if reg_token:
             def _on_first_connect_provision() -> None:
                 self._update_splash_status("Connected — self-registering…")
-                task = asyncio.create_task(
-                    self._provision_self_register(),
-                    name="provision.self_register",
-                )
-                task.add_done_callback(
-                    lambda t: self.logger.error(
-                        "Self-registration failed: %s", t.exception(), exc_info=t.exception()
-                    )
-                    if not t.cancelled() and t.exception()
-                    else None
-                )
+                task = asyncio.create_task(self._provision_self_register())
+                task.add_done_callback(self._log_background_task_error)
 
             self.mqtt_client.set_on_first_connect(_on_first_connect_provision)
 
@@ -509,6 +501,80 @@ class MqttDisplayClientManager:
             self._render_startup_splash(status_text=self._current_splash_status)
             if changed:
                 await self.mqtt_client.request_reconnect("bootstrap_config")
+
+    def _log_background_task_error(self, task: asyncio.Task) -> None:
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc:
+            self.logger.error("Background task failed: %s", exc, exc_info=exc)
+
+    async def _provision_self_register(self) -> None:
+        reg_token = self.device_config.reg_token
+        platform_url = (self.config.platform_url or self.device_config.platform_url or "").rstrip("/")
+        if not reg_token or not platform_url:
+            self.logger.warning(
+                "Provision self-register skipped: reg_token=%s platform_url=%s",
+                "yes" if reg_token else "no",
+                platform_url or "(unset)",
+            )
+            return
+
+        endpoint = f"{platform_url}/api/displays/provision-register"
+        payload = {
+            "reg_token": reg_token,
+            "device_id": self.mqtt_client.device_id,
+            "hostname": self.config.hostname,
+            "capabilities": self.capabilities,
+            "metadata": self.metadata,
+        }
+
+        timeout = aiohttp.ClientTimeout(total=8)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(endpoint, json=payload) as resp:
+                    body = await resp.text()
+                    if resp.status >= 300:
+                        self._update_splash_status("Provision register failed", is_error=True)
+                        self.logger.error(
+                            "Provision self-register failed status=%s body=%s",
+                            resp.status,
+                            body,
+                        )
+                        return
+        except Exception as e:
+            self._update_splash_status("Provision register failed", is_error=True)
+            self.logger.error("Provision self-register error: %s", e, exc_info=True)
+            return
+
+        self._update_splash_status("Registered — waiting for finalize…")
+        self.logger.info("Provision self-register succeeded via %s", endpoint)
+
+    def _apply_provision_bundle(self, payload: Dict[str, Any]) -> None:
+        if not isinstance(payload, dict):
+            self.logger.warning("Ignoring invalid provision bundle payload")
+            return
+
+        mapped_payload = {
+            "platform_url": payload.get("platform_url"),
+            "host": payload.get("mqtt_host"),
+            "port": payload.get("mqtt_port"),
+            "username": payload.get("mqtt_username"),
+            "password": payload.get("mqtt_password"),
+            "reg_token": payload.get("reg_token"),
+            "display_name": payload.get("display_name") or self.config.display_name,
+            "display_location": payload.get("display_location") or self.config.display_location,
+            "source": payload.get("source", "provision_bundle"),
+        }
+        self.logger.info(
+            "Provision bundle received: mqtt=%s:%s reg_token=%s",
+            mapped_payload.get("host") or "(unset)",
+            mapped_payload.get("port") or "(unset)",
+            "yes" if mapped_payload.get("reg_token") else "no",
+        )
+        self._update_splash_status("Provisioning received — applying…")
+        self.apply_bootstrap_config(mapped_payload)
 
     def apply_bootstrap_config(self, payload: Dict[str, Any]) -> None:
         """Called by the webhook server thread to apply config."""
@@ -554,6 +620,18 @@ class MqttDisplayClientManager:
                 self.webhook_server.start()
                 self.logger.info("Webhook server started")
 
+            if self.config.get("provisioning_enabled", True) and not self.provisioning_server:
+                self.provisioning_server = start_provisioning_server(
+                    hostname=self.config.hostname,
+                    ip_address=get_local_ip(),
+                    on_provisioned=self._apply_provision_bundle,
+                    port=int(self.config.get("provisioning_port", 7777)),
+                )
+                self.logger.info(
+                    "Provisioning server started on port %s",
+                    self.config.get("provisioning_port", 7777),
+                )
+
             if mdns_ok:
                 print("Services started — display is discoverable via mDNS")
             else:
@@ -568,18 +646,16 @@ class MqttDisplayClientManager:
                 await self.mdns_service.stop()
             if self.webhook_server:
                 self.webhook_server.stop()
+            if self.provisioning_server:
+                self.provisioning_server.shutdown()
+                self.provisioning_server.server_close()
+                self.provisioning_server = None
         except Exception as e:
             self.logger.warning("Error stopping services: %s", e)
 
     def _has_valid_mqtt_host(self) -> bool:
         host = (self.config.mqtt_broker_host or "").strip()
-        if not host:
-            return False
-        local_hosts = ("localhost", "127.0.0.1")
-        if host in local_hosts:
-            # Allow local brokers when explicitly opted in (e.g. dev / single-machine setups)
-            return bool(self.config.get("mqtt_allow_local"))
-        return True
+        return host not in ("", "localhost", "127.0.0.1")
 
     async def _discover_platform_via_mdns(self) -> bool:
         self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 10s)…")
@@ -714,15 +790,15 @@ class MqttDisplayClientManager:
             "services": {
                 "mdns": self.mdns_service.is_running() if self.mdns_service else False,
                 "webhook": self.webhook_server.is_running() if self.webhook_server else False,
+                "provisioning": self.provisioning_server is not None,
             },
         }
 
     async def shutdown(self):
         """Shutdown the client gracefully (idempotent)."""
-        async with self._shutdown_lock:
-            if self._shutting_down:
-                return
-            self._shutting_down = True
+        if getattr(self, "_shutting_down", False):
+            return
+        self._shutting_down = True
 
         self.logger.info("Shutting down MQTT display client...")
 
