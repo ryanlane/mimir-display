@@ -85,6 +85,8 @@ class MqttDisplayClientManager:
         self.pair_code: str = generate_pair_code()
         self.pair_code_published: bool = False
         self._current_splash_status = ""
+        self._current_splash_is_error = False
+        self._last_splash_signature: Optional[tuple] = None
 
         # Build and display the dynamic startup splash screen:
         #   logo + QR code + 6-char pairing code + IP address
@@ -224,11 +226,22 @@ class MqttDisplayClientManager:
 
 
     def _update_splash_status(self, text: str, is_error: bool = False) -> None:
-        """Overwrite the status banner on the startup splash and redisplay it."""
+        """Update status text, only redrawing the splash for error-state changes."""
         if not self._splash_path or not os.path.exists(self._splash_path):
             return
         try:
+            if text == self._current_splash_status and is_error == self._current_splash_is_error:
+                return
+
             self._current_splash_status = text
+            self._current_splash_is_error = is_error
+
+            # Avoid extra e-ink refreshes for normal progress updates.
+            # The status is still tracked so the next full splash render can include it.
+            if not is_error:
+                self.logger.debug("Splash status updated without redraw: %s", text)
+                return
+
             updated = overlay_status(self._splash_path, text, is_error=is_error)
             if updated is None:
                 return
@@ -256,11 +269,25 @@ class MqttDisplayClientManager:
                 status_text=status_text,
             )
 
+            splash_signature = (
+                self.pair_code,
+                self.config.platform_url or None,
+                get_local_ip(),
+                status_text,
+                self._current_splash_is_error,
+                splash_w,
+                splash_h,
+            )
+            if splash_signature == self._last_splash_signature:
+                self.logger.debug("Skipping identical startup splash render")
+                return
+
             splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
             os.makedirs(os.path.dirname(splash_path), exist_ok=True)
             splash_img.save(splash_path, format="PNG")
             self._splash_path = splash_path
             self._current_splash_status = status_text
+            self._last_splash_signature = splash_signature
 
             tmp_dm = DisplayManager(self.capabilities, os.path.join(self.data_dir, "cache"), self.logger)
             tmp_dm.display_from_file(splash_path)
