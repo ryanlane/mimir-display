@@ -25,18 +25,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from mimir_display.utils.helpers import resolve_writable_dir
-
 
 logger = logging.getLogger(__name__)
 
 _FILENAME = "device_config.json"
+_CANDIDATE_DIRS = [
+    Path(os.environ.get("MIMIR_STATE_DIR", "") or "/nonexistent"),
+    Path("/var/lib/mimir-display"),
+    Path.home() / ".mimir",
+]
 
 
 def _resolve_path() -> Path:
-    preferred = os.environ.get("MIMIR_STATE_DIR") or None
-    state_dir = resolve_writable_dir(preferred, "device_config")
-    return Path(state_dir) / _FILENAME
+    for d in _CANDIDATE_DIRS:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            test = d / ".write_test"
+            test.write_text("ok")
+            test.unlink(missing_ok=True)
+            return d / _FILENAME
+        except (PermissionError, OSError):
+            continue
+    fallback = Path.cwd() / _FILENAME
+    logger.warning("All state dirs unwritable; using %s", fallback)
+    return fallback
 
 
 class DeviceConfig:
@@ -163,6 +175,10 @@ class DeviceConfig:
     @property
     def mqtt_password(self) -> Optional[str]:
         return self._data.get("mqtt_password")
+
+    @property
+    def reg_token(self) -> Optional[str]:
+        return self._data.get("reg_token")
 
     @property
     def is_configured(self) -> bool:
