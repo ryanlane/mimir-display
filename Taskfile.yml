@@ -126,6 +126,56 @@ tasks:
     cmds:
       - ssh {{.CLI_ARGS}}
 
+  reset:
+    desc: "Reset a display to factory-unpaired state and restart (usage: task reset -- pi@host)"
+    summary: |
+      Deletes all server-assigned pairing data from the display so it boots as
+      a fresh unconfigured device (provisioning server + QR code on screen).
+
+      Removes:
+        - device_config.json      — server-assigned MQTT / platform credentials
+        - registration_state.json — MQTT registration pair state
+        - mqtt_state.json         — runtime scene / URL override state
+        - device_state.json       — scene assignment persistence
+
+      State dirs checked (same precedence as the client code):
+        $MIMIR_STATE_DIR, /var/lib/mimir-display, ~/.mimir, <data_dir>
+
+      The service is restarted after the files are removed.
+    prompt: "This will wipe all pairing data on the display and restart it. Continue?"
+    cmds:
+      - |
+        TARGET={{.CLI_ARGS}}
+        if [ -z "$TARGET" ]; then echo "Usage: task reset -- user@host"; exit 1; fi
+        echo "Resetting $TARGET to unpaired state..."
+        ssh ${TARGET} bash -s << 'ENDSSH'
+          set -e
+          FILES=(
+            "/var/lib/mimir-display/device_config.json"
+            "/var/lib/mimir-display/registration_state.json"
+            "${HOME}/.mimir/device_config.json"
+            "${HOME}/.mimir/registration_state.json"
+          )
+          # Also clear data-dir state files (default location)
+          DATA_DIRS=(
+            "/var/lib/mimir-display"
+            "${HOME}/.mimir"
+            "/opt/mimir-display/data"
+          )
+          for dir in "${DATA_DIRS[@]}"; do
+            FILES+=("${dir}/mqtt_state.json" "${dir}/device_state.json")
+          done
+          removed=0
+          for f in "${FILES[@]}"; do
+            if [ -f "$f" ]; then
+              sudo rm -f "$f" && echo "  Removed: $f" && removed=$((removed+1))
+            fi
+          done
+          echo "  Removed $removed file(s)."
+          sudo systemctl restart mimir-display
+          echo "  Service restarted — display will boot as unconfigured."
+        ENDSSH
+
   # ============================================================================
   # CLEAN
   # ============================================================================

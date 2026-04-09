@@ -21,10 +21,11 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import socket
 import sys
 from datetime import datetime
-from typing import Optional
-from urllib.parse import urljoin, urlparse
+from typing import Optional, Tuple
+from urllib.parse import urljoin, urlparse, urlunparse
 
 
 def env_str(key: str, default: Optional[str] = None) -> str:
@@ -281,6 +282,34 @@ def parse_iso8601(ts: str) -> Optional[datetime]:
         return datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def resolve_dot_local_url(url: str) -> Tuple[str, Optional[str]]:
+    """Resolve an mDNS .local hostname in a URL to its IP address.
+
+    Many environments (Docker, some Linux network stacks) cannot resolve
+    .local hostnames via the normal resolver that aiohttp uses, but
+    ``socket.gethostbyname`` works because it goes through the system's
+    mDNS stack (avahi / systemd-resolved).
+
+    Returns:
+        (rewritten_url, host_header) where:
+          - rewritten_url has the hostname replaced with the resolved IP
+            (unchanged if the host is not .local or resolution fails)
+          - host_header is the original .local hostname to send as the
+            HTTP ``Host:`` header (None if no rewriting was done)
+    """
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname or ""
+        if not hostname.endswith(".local"):
+            return url, None
+        resolved_ip = socket.gethostbyname(hostname)
+        port_suffix = f":{parsed.port}" if parsed.port else ""
+        rebuilt = parsed._replace(netloc=resolved_ip + port_suffix)
+        return urlunparse(rebuilt), hostname
+    except Exception:
+        return url, None
 
 
 def combine_url(base: str, maybe_rel: str) -> str:

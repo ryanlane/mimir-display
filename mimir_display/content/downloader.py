@@ -9,13 +9,14 @@ import asyncio
 import hashlib
 import logging
 import os
-import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import aiohttp
+
+from mimir_display.utils.helpers import resolve_writable_dir
 
 
 class ContentDownloader:
@@ -40,39 +41,16 @@ class ContentDownloader:
 
     def _resolve_cache_dir(self, explicit: Optional[Path]) -> Path:
         """Resolve a writable cache directory with precedence and fallbacks."""
-        candidates: list[Path] = []
-        if explicit:
-            candidates.append(Path(explicit))
-
-        env_cache = os.getenv("MIMIR_CACHE_DIR")
-        if env_cache:
-            candidates.append(Path(env_cache))
-
-        data_dir = os.getenv("DATA_DIR")
-        if data_dir:
-            candidates.append(Path(data_dir) / "cache")
-
-        candidates.append(Path("/var/lib/mimir-display/cache"))
-        candidates.append(Path.home() / ".mimir" / "content_cache")  # legacy fallback
-
-        for c in candidates:
-            try:
-                c.mkdir(parents=True, exist_ok=True)
-                test_file = c / ".write_test"
-                with open(test_file, "w") as f:
-                    f.write("ok")
-                test_file.unlink(missing_ok=True)
-                self.logger.info(f"Using content cache directory: {c}")
-                return c
-            except Exception as e:  # PermissionError or other OSErrors
-                self.logger.warning(f"Cache directory not usable ({c}): {e}")
-                continue
-
-        # Last resort: current working directory
-        fallback = Path.cwd() / "cache"
-        fallback.mkdir(parents=True, exist_ok=True)
-        self.logger.error(f"All cache directory candidates failed; using {fallback}")
-        return fallback
+        # Prefer explicit arg, then MIMIR_CACHE_DIR, then DATA_DIR/cache
+        preferred = (
+            str(explicit)
+            if explicit
+            else (os.getenv("MIMIR_CACHE_DIR") or os.getenv("DATA_DIR"))
+        )
+        subdir = None if (explicit or os.getenv("MIMIR_CACHE_DIR")) else "cache"
+        cache_dir = resolve_writable_dir(preferred, "content_cache", subdir=subdir)
+        self.logger.info("Using content cache directory: %s", cache_dir)
+        return Path(cache_dir)
     
     def _sha256_file(self, file_path: Path) -> str:
         """Calculate SHA256 hash of a file."""
@@ -170,24 +148,10 @@ class ContentDownloader:
                 return cache_path
         
         # Download the file
-        self.logger.info(f"Downloading {content_id} from {url}")
-        # Early .local host resolution (mirrors fallback path in commands)
-        host_header = None
-        try:
-            from urllib.parse import urlparse, urlunparse
-            parsed = urlparse(url)
-            hostname = parsed.hostname or ""
-            if hostname.endswith(".local"):
-                try:
-                    resolved_ip = socket.gethostbyname(hostname)
-                    host_header = hostname
-                    rebuilt = parsed._replace(netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else ""))
-                    url = urlunparse(rebuilt)
-                    self.logger.debug("Pre-resolved .local host %s -> %s", hostname, resolved_ip)
-                except Exception as re:
-                    self.logger.debug(".local pre-resolution failed (%s): %s", hostname, re)
-        except Exception:  # parsing errors unlikely; ignore
-            pass
+        self.logger.info("Downloading %s from %s", content_id, url)
+        url, host_header = resolve_dot_local_url(url)
+        if host_header:
+            self.logger.debug("Pre-resolved .local host %s -> %s", host_header, url)
         start_time = datetime.now()
         
         temp_path = cache_path.with_suffix('.tmp')
@@ -305,35 +269,6 @@ class ContentDownloader:
             return {"type": "url", "url": a["image_url"], "content_type": a.get("content_type")}
 
         raise KeyError("url")  # keep the same error type but now it means truly missing
-
-    async def process_assignment(self, assignment: Dict[str, Any]) -> Dict[str, Any]:
-        self.logger.info("Processing assignment %s", assignment.get("assignment_id"))
-        try:
-            self._normalize_delivery(assignment)  # validation only; legacy path retained
-            # url/content_type extraction retained for compatibility if later needed
-            # (Removed unused local variables to satisfy linter.)
-        except KeyError as e:
-            # This was a shape issue before; now only log it at WARNING
-            self.logger.warning("Assignment %s missing %s", assignment.get("assignment_id"), e)
-            return {
-                "assignment_id": assignment.get("assignment_id"),
-                "sequence": assignment.get("sequence"),
-                "success": False,
-                "error": str(e),
-                "error_type": "KeyError",
-                "processed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        except Exception as e:
-            self.logger.exception("Assignment %s processing failed", assignment.get("assignment_id"))
-            return {
-                "assignment_id": assignment.get("assignment_id"),
-                "sequence": assignment.get("sequence"),
-                "success": False,
-                "error": str(e),
-                "error_type": "processing_failed",
-                "processed_at": datetime.now(timezone.utc).isoformat(),
-            }
-
 
 class AssignmentProcessor:
     """Processes MQTT assignment commands and manages content workflow."""

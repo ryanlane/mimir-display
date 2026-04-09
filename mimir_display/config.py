@@ -61,6 +61,7 @@ class Config:
             # MQTT configuration
             "mqtt_broker_host": os.getenv("MQTT_BROKER_HOST", "").strip(),
             "mqtt_broker_port": env_int("MQTT_BROKER_PORT", 1883),
+            "mqtt_allow_local": env_str("MQTT_ALLOW_LOCAL", "false").lower() == "true",
             "mqtt_username": os.getenv("MQTT_USERNAME"),
             "mqtt_password": os.getenv("MQTT_PASSWORD"),
             "mqtt_heartbeat_interval": env_int("MQTT_HEARTBEAT_INTERVAL", 30),

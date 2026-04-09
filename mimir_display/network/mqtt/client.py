@@ -406,6 +406,7 @@ class MqttDisplayClient:
     def set_on_first_connect(self, callback: Callable[[], None]) -> None:
         """Register a callback invoked once when MQTT first connects successfully."""
         self._on_first_connect = callback
+        self._first_connect_fired = False
 
     def set_on_pair_status(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
         """Register a callback invoked when the server acks the pair code."""

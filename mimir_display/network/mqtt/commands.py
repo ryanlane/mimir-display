@@ -4,7 +4,6 @@ import asyncio
 import json
 import logging
 import random
-import socket
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +23,7 @@ except ImportError:
     ClientSession = None
     ClientTimeout = None
 from mimir_display.content.downloader import AssignmentProcessor
+from mimir_display.utils.helpers import resolve_dot_local_url
 from .topics import MqttTopicManager
 
 if TYPE_CHECKING:
@@ -598,25 +598,12 @@ class MqttCommandHandler:
 
         attempts = 3
         backoff = 0.75  # seconds
-        parsed = urlparse(url)
-        original_host = parsed.hostname or ""
+        original_host = urlparse(url).hostname or ""
 
         # Pre-resolve .local before first attempt so we don't rely on aiohttp resolver
-        host_header = None
-        if original_host.endswith(".local"):
-            try:
-                resolved_ip = socket.gethostbyname(original_host)
-                host_header = original_host  # preserve logical host for Host header
-                rebuilt = parsed._replace(
-                    netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else "")
-                )
-                url = urlunparse(rebuilt)
-                parsed = rebuilt
-                self.logger.debug(
-                    "Pre-resolved .local hostname %s -> %s", original_host, resolved_ip
-                )
-            except Exception as e:
-                self.logger.debug("Pre-resolution of .local host %s failed: %s", original_host, e)
+        url, host_header = resolve_dot_local_url(url)
+        if host_header:
+            self.logger.debug("Pre-resolved .local hostname %s -> %s", host_header, urlparse(url).hostname)
 
         async with ClientSession() as session:
             last_exc = None
@@ -654,20 +641,13 @@ class MqttCommandHandler:
                 except Exception as e:
                     last_exc = e
                     if i < attempts and original_host.endswith(".local"):
-                        try:
-                            resolved_ip = socket.gethostbyname(original_host)
-                            self.logger.info(
-                                "Resolved .local hostname %s -> %s (retrying)",
-                                original_host,
-                                resolved_ip,
-                            )
-                            rebuilt = parsed._replace(
-                                netloc=resolved_ip + (":" + str(parsed.port) if parsed.port else "")
-                            )
-                            url = urlunparse(rebuilt)
+                        retried_url, _ = resolve_dot_local_url(
+                            urlunparse(urlparse(url)._replace(netloc=original_host))
+                        )
+                        if retried_url != url:
+                            self.logger.info("Resolved .local hostname %s (retrying)", original_host)
+                            url = retried_url
                             continue  # retry immediately with rebuilt URL
-                        except Exception as re:
-                            self.logger.debug("Manual .local resolution failed: %s", re)
             raise last_exc  # All retries exhausted
 
     async def _render_local_file(self, path: Path) -> None:

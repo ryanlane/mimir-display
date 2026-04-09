@@ -18,7 +18,6 @@ from .config import Config
 import re
 from .network.mqtt_client import MqttDisplayClient
 from .network import WebhookServer, MDNSService, discover_mimir_server
-from .network.provisioning_server import start_provisioning_server
 from .content import ImageCache, DisplayManager
 from .content.splash import build_splash, generate_pair_code, get_local_ip, overlay_status
 from .hardware import get_display_capabilities
@@ -65,7 +64,6 @@ class MqttDisplayClientManager:
             return s or "display"
         canonical_id = _slug(raw_host)
         if original_id and _slug(original_id) != canonical_id:
-            self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO")) if not hasattr(self, 'logger') else self.logger
             self.logger.info("Overriding display_id '%s' with hostname canonical '%s'", original_id, canonical_id)
         # Force config display_id to canonical hostname-based slug
         self.config.set('display_id', canonical_id)
@@ -85,36 +83,12 @@ class MqttDisplayClientManager:
         self.pair_code: str = generate_pair_code()
         self.pair_code_published: bool = False
         self._current_splash_status = ""
-        self._provision_server = None
 
-        # When the device has never been configured (no platform_url in .env or
-        # device_config.json), start the provisioning web server so the user can
-        # bootstrap it by scanning a QR code and pasting a provision bundle from
-        # the Mimir web UI — rather than having the display scan mDNS indefinitely.
+        # Build and display the dynamic startup splash screen:
+        #   logo + QR code + 6-char pairing code + IP address
         self._splash_path: Optional[str] = None
-        local_ip = get_local_ip()
-        is_unconfigured = not self.config.platform_url and not self.device_config.is_configured
-
-        if is_unconfigured:
-            provision_port = int(os.environ.get("PROVISION_PORT", "7777"))
-            provision_url = f"http://{local_ip}:{provision_port}/setup"
-            self._render_startup_splash(
-                status_text=f"Visit {provision_url} to configure",
-                qr_url=provision_url,
-            )
-            try:
-                self._provision_server = start_provisioning_server(
-                    hostname=self.config.hostname,
-                    ip_address=local_ip,
-                    on_provisioned=self._apply_provision_bundle,
-                    port=provision_port,
-                )
-            except OSError:
-                self.logger.warning("Could not start provisioning server; falling back to mDNS scan")
-                self._render_startup_splash(status_text="Searching for Mimir server...")
-        else:
-            initial_status = "Searching for Mimir server..." if not self.config.platform_url else ""
-            self._render_startup_splash(status_text=initial_status)
+        initial_status = "Searching for Mimir server..." if not self.config.platform_url else ""
+        self._render_startup_splash(status_text=initial_status)
 
         # Optional startup test pattern for non e-ink framebuffer displays.
         # Enabled when STARTUP_TEST_PATTERN=1 (default off). Only applies to color / non Inky backends.
@@ -169,6 +143,8 @@ class MqttDisplayClientManager:
         self.force_refresh_flag = False
         self._mqtt_config_task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._shutting_down = False
+        self._shutdown_lock = asyncio.Lock()
 
         # Load persistent state
         self._load_state()
@@ -261,30 +237,7 @@ class MqttDisplayClientManager:
         except Exception as e:  # noqa: BLE001
             self.logger.debug("Failed to update splash status: %s", e)
 
-    def _apply_provision_bundle(self, bundle: dict) -> None:
-        """Write server config from a provision bundle and restart the client.
-
-        Called by the provisioning HTTP server when the user submits a valid bundle.
-        Writes device_config.json then exits; systemd restarts the service.
-        """
-        self.logger.info("Applying provision bundle: platform_url=%s mqtt_host=%s",
-                         bundle.get("platform_url"), bundle.get("mqtt_host"))
-        payload: dict = {
-            "config": {
-                "platform_url":  bundle.get("platform_url"),
-                "mqtt_host":     bundle.get("mqtt_host"),
-                "mqtt_port":     bundle.get("mqtt_port"),
-                "mqtt_username": bundle.get("mqtt_username"),
-                "mqtt_password": bundle.get("mqtt_password"),
-            }
-        }
-        self.device_config.apply_finalize_payload(payload)
-        self.logger.info("Provision bundle applied — restarting to activate config")
-        # Exit cleanly; systemd (Restart=on-failure / always) will restart the process.
-        import sys
-        sys.exit(0)
-
-    def _render_startup_splash(self, status_text: str = "", qr_url: Optional[str] = None) -> None:
+    def _render_startup_splash(self, status_text: str = "") -> None:
         try:
             logo_path = (
                 os.environ.get("STARTUP_LOGO_PATH")
@@ -300,7 +253,6 @@ class MqttDisplayClientManager:
                 ip_address=get_local_ip(),
                 logo_path=logo_path if os.path.exists(logo_path) else None,
                 status_text=status_text,
-                qr_url=qr_url,
             )
 
             splash_path = os.path.join(self.data_dir, "cache", "startup_splash.png")
@@ -502,6 +454,9 @@ class MqttDisplayClientManager:
         username = payload.get("username")
         password = payload.get("password")
         platform_url = payload.get("platform_url")
+        reg_token = payload.get("reg_token")
+
+        persisted = self.device_config.apply_bootstrap_payload(payload)
 
         changed = False
         if isinstance(host, str) and host and host != self.config.mqtt_broker_host:
@@ -520,7 +475,24 @@ class MqttDisplayClientManager:
             self.config.set("platform_url", platform_url)
             changed = True
 
-        if changed:
+        if reg_token:
+            def _on_first_connect_provision() -> None:
+                self._update_splash_status("Connected — self-registering…")
+                task = asyncio.create_task(
+                    self._provision_self_register(),
+                    name="provision.self_register",
+                )
+                task.add_done_callback(
+                    lambda t: self.logger.error(
+                        "Self-registration failed: %s", t.exception(), exc_info=t.exception()
+                    )
+                    if not t.cancelled() and t.exception()
+                    else None
+                )
+
+            self.mqtt_client.set_on_first_connect(_on_first_connect_provision)
+
+        if changed or persisted:
             self.state["mqtt_override"] = {
                 "host": self.config.mqtt_broker_host,
                 "port": self.config.mqtt_broker_port,
@@ -529,12 +501,14 @@ class MqttDisplayClientManager:
                 self.state["platform_url_override"] = self.config.platform_url
             self._save_state()
             self.logger.info(
-                "Bootstrap config applied: mqtt=%s:%s",
+                "Bootstrap config applied: mqtt=%s:%s reg_token=%s",
                 self.config.mqtt_broker_host,
                 self.config.mqtt_broker_port,
+                "yes" if reg_token else "no",
             )
             self._render_startup_splash(status_text=self._current_splash_status)
-            await self.mqtt_client.request_reconnect("bootstrap_config")
+            if changed:
+                await self.mqtt_client.request_reconnect("bootstrap_config")
 
     def apply_bootstrap_config(self, payload: Dict[str, Any]) -> None:
         """Called by the webhook server thread to apply config."""
@@ -599,7 +573,13 @@ class MqttDisplayClientManager:
 
     def _has_valid_mqtt_host(self) -> bool:
         host = (self.config.mqtt_broker_host or "").strip()
-        return host not in ("", "localhost", "127.0.0.1")
+        if not host:
+            return False
+        local_hosts = ("localhost", "127.0.0.1")
+        if host in local_hosts:
+            # Allow local brokers when explicitly opted in (e.g. dev / single-machine setups)
+            return bool(self.config.get("mqtt_allow_local"))
+        return True
 
     async def _discover_platform_via_mdns(self) -> bool:
         self.logger.info("PLATFORM_URL not set — scanning mDNS for Mimir server (up to 10s)…")
@@ -739,9 +719,10 @@ class MqttDisplayClientManager:
 
     async def shutdown(self):
         """Shutdown the client gracefully (idempotent)."""
-        if getattr(self, "_shutting_down", False):
-            return
-        self._shutting_down = True
+        async with self._shutdown_lock:
+            if self._shutting_down:
+                return
+            self._shutting_down = True
 
         self.logger.info("Shutting down MQTT display client...")
 

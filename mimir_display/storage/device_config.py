@@ -25,30 +25,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from mimir_display.utils.helpers import resolve_writable_dir
+
 
 logger = logging.getLogger(__name__)
 
 _FILENAME = "device_config.json"
-_CANDIDATE_DIRS = [
-    Path(os.environ.get("MIMIR_STATE_DIR", "") or "/nonexistent"),
-    Path("/var/lib/mimir-display"),
-    Path.home() / ".mimir",
-]
 
 
 def _resolve_path() -> Path:
-    for d in _CANDIDATE_DIRS:
-        try:
-            d.mkdir(parents=True, exist_ok=True)
-            test = d / ".write_test"
-            test.write_text("ok")
-            test.unlink(missing_ok=True)
-            return d / _FILENAME
-        except (PermissionError, OSError):
-            continue
-    fallback = Path.cwd() / _FILENAME
-    logger.warning("All state dirs unwritable; using %s", fallback)
-    return fallback
+    preferred = os.environ.get("MIMIR_STATE_DIR") or None
+    state_dir = resolve_writable_dir(preferred, "device_config")
+    return Path(state_dir) / _FILENAME
 
 
 class DeviceConfig:
@@ -96,6 +84,7 @@ class DeviceConfig:
             "mqtt_port":        "mqtt_port",
             "mqtt_username":    "mqtt_username",
             "mqtt_password":    "mqtt_password",
+            "reg_token":        "reg_token",
         }
         changed = False
         for src, dst in mapping.items():
@@ -112,6 +101,34 @@ class DeviceConfig:
                 "Device config updated from server: %s",
                 {k: v for k, v in self._data.items() if "password" not in k},
             )
+
+    def apply_bootstrap_payload(self, payload: Dict[str, Any]) -> bool:
+        """Persist a webhook/bootstrap config payload using the same config keys."""
+        if not isinstance(payload, dict) or not payload:
+            return False
+
+        mapping = {
+            "platform_url": "platform_url",
+            "display_name": "display_name",
+            "display_location": "display_location",
+            "host": "mqtt_host",
+            "port": "mqtt_port",
+            "username": "mqtt_username",
+            "password": "mqtt_password",
+            "reg_token": "reg_token",
+        }
+        changed = False
+        for src, dst in mapping.items():
+            val = payload.get(src)
+            if val is not None and self._data.get(dst) != val:
+                self._data[dst] = val
+                changed = True
+
+        if changed:
+            self._data["configured_at"] = datetime.now(timezone.utc).isoformat()
+            self._data["configured_by"] = payload.get("source", "bootstrap")
+            self.save()
+        return changed
 
     # ------------------------------------------------------------------ read
 

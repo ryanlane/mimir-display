@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 
+from mimir_display.utils.helpers import resolve_writable_dir
+
 
 class RegistrationState:
     """Manages persistent registration state for MQTT workflow.
@@ -43,52 +45,11 @@ class RegistrationState:
     # Path resolution helpers
     # ---------------------------------------------------------------------
     def _resolve_default_state_file(self) -> Path:
-        """Determine an appropriate location for the registration state file.
-
-        Precedence:
-            1. MIMIR_STATE_DIR (environment variable)
-            2. /var/lib/mimir-display (if writable)
-            3. Home directory (~/.mimir) as a final fallback
-        """
-        candidates = []
-
-        # 1. Explicit environment variable
-        env_dir = os.getenv("MIMIR_STATE_DIR")
-        if env_dir:
-            candidates.append(Path(env_dir))
-
-        # 2. Standard runtime dir used by systemd unit
-        candidates.append(Path("/var/lib/mimir-display"))
-
-        # 3. Developer fallback (may be blocked by systemd ProtectHome)
-        candidates.append(Path.home() / ".mimir")
-
-        for directory in candidates:
-            try:
-                directory.mkdir(parents=True, exist_ok=True)
-                # Check writability by attempting to open a temp file
-                test_file = directory / ".write_test"
-                with open(test_file, "w") as f:  # noqa: PTH123
-                    f.write("ok")
-                test_file.unlink(missing_ok=True)
-                # Log at INFO so it's visible with default LOG_LEVEL=INFO
-                self.logger.info(f"Using registration state directory: {directory}")
-                return directory / "registration_state.json"
-            except PermissionError:
-                self.logger.warning(
-                    f"RegistrationState directory not writable: {directory}; trying next fallback"
-                )
-            except OSError as e:  # Catch other filesystem errors
-                self.logger.warning(
-                    f"Failed to prepare registration state directory {directory}: {e}; trying next"
-                )
-
-        # Absolute last resort (should not normally happen)
-        fallback = Path.cwd() / "registration_state.json"
-        self.logger.error(
-            f"All candidate state directories failed; falling back to {fallback}. Persistence may be ephemeral."
-        )
-        return fallback
+        """Determine an appropriate location for the registration state file."""
+        preferred = os.getenv("MIMIR_STATE_DIR")
+        state_dir = resolve_writable_dir(preferred, "registration_state")
+        self.logger.info("Using registration state directory: %s", state_dir)
+        return Path(state_dir) / "registration_state.json"
     
     def _load_state(self) -> None:
         """Load registration state from disk."""

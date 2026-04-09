@@ -30,32 +30,32 @@ _HTML_TEMPLATE = """\
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Mimir Display Setup</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
      background:#0f0f1a;color:#e0e0ff;min-height:100vh;display:flex;
-     align-items:center;justify-content:center;padding:1rem}
-.card{background:#1a1a2e;border:1px solid #2a2a4a;border-radius:12px;
-      padding:2rem;max-width:480px;width:100%}
-h1{font-size:1.4rem;font-weight:700;margin-bottom:.25rem;color:#fff}
-.sub{font-size:.875rem;color:#888;margin-bottom:1.5rem;line-height:1.5}
-.meta{background:#12122a;border:1px solid #2a2a4a;border-radius:8px;
+     align-items:center;justify-content:center;padding:1rem}}
+.card{{background:#1a1a2e;border:1px solid #2a2a4a;border-radius:12px;
+      padding:2rem;max-width:480px;width:100%}}
+h1{{font-size:1.4rem;font-weight:700;margin-bottom:.25rem;color:#fff}}
+.sub{{font-size:.875rem;color:#888;margin-bottom:1.5rem;line-height:1.5}}
+.meta{{background:#12122a;border:1px solid #2a2a4a;border-radius:8px;
       padding:.75rem 1rem;margin-bottom:1.5rem;font-size:.8rem;color:#aaa;
-      display:flex;flex-direction:column;gap:.3rem}
-.meta b{color:#c0b8ff}
-label{display:block;font-size:.875rem;font-weight:600;color:#aaa;margin-bottom:.4rem}
-textarea{width:100%;height:110px;background:#12122a;border:1px solid #3a3a5a;
+      display:flex;flex-direction:column;gap:.3rem}}
+.meta b{{color:#c0b8ff}}
+label{{display:block;font-size:.875rem;font-weight:600;color:#aaa;margin-bottom:.4rem}}
+textarea{{width:100%;height:110px;background:#12122a;border:1px solid #3a3a5a;
          border-radius:8px;padding:.75rem;color:#e0e0ff;font-size:.8rem;
-         font-family:monospace;resize:vertical;outline:none}
-textarea:focus{border-color:#7c6af7}
-.hint{font-size:.75rem;color:#666;margin:.4rem 0 1rem;line-height:1.5}
-.hint strong{color:#888}
-button{width:100%;padding:.8rem;background:#7c6af7;color:#fff;border:none;
-       border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:opacity .15s}
-button:hover{opacity:.85}
-button:disabled{opacity:.4;cursor:not-allowed}
-.msg{margin-top:1rem;padding:.75rem 1rem;border-radius:8px;font-size:.875rem;display:none;line-height:1.5}
-.msg.ok{background:rgba(76,175,80,.15);border:1px solid rgba(76,175,80,.3);color:#81c784}
-.msg.err{background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.3);color:#ef9a9a}
+         font-family:monospace;resize:vertical;outline:none}}
+textarea:focus{{border-color:#7c6af7}}
+.hint{{font-size:.75rem;color:#666;margin:.4rem 0 1rem;line-height:1.5}}
+.hint strong{{color:#888}}
+button{{width:100%;padding:.8rem;background:#7c6af7;color:#fff;border:none;
+       border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;transition:opacity .15s}}
+button:hover{{opacity:.85}}
+button:disabled{{opacity:.4;cursor:not-allowed}}
+.msg{{margin-top:1rem;padding:.75rem 1rem;border-radius:8px;font-size:.875rem;display:none;line-height:1.5}}
+.msg.ok{{background:rgba(76,175,80,.15);border:1px solid rgba(76,175,80,.3);color:#81c784}}
+.msg.err{{background:rgba(229,57,53,.12);border:1px solid rgba(229,57,53,.3);color:#ef9a9a}}
 </style>
 </head>
 <body>
@@ -67,47 +67,47 @@ button:disabled{opacity:.4;cursor:not-allowed}
     <div><b>IP Address:</b> {ip}</div>
   </div>
   <label for="bundle">Provision Bundle</label>
-  <textarea id="bundle" placeholder="Paste bundle here…" spellcheck="false"></textarea>
-  <p class="hint">In the Mimir web UI go to <strong>Displays → Get Provision Bundle</strong>, copy the string, and paste it above.</p>
+  <textarea id="bundle" placeholder="Paste bundle here\u2026" spellcheck="false"></textarea>
+  <p class="hint">In the Mimir web UI go to <strong>Displays &rarr; Get Provision Bundle</strong>, copy the string, and paste it above.</p>
   <button id="btn" onclick="applyBundle()">Apply Configuration</button>
   <div id="msg" class="msg"></div>
 </div>
 <script>
-async function applyBundle() {
+async function applyBundle() {{
   const bundle = document.getElementById('bundle').value.trim();
   const btn = document.getElementById('btn');
   const msg = document.getElementById('msg');
   msg.style.display = 'none';
-  if (!bundle) { showMsg('Paste a provision bundle first.', false); return; }
+  if (!bundle) {{ showMsg('Paste a provision bundle first.', false); return; }}
   btn.disabled = true;
   btn.textContent = 'Applying\u2026';
-  try {
-    const r = await fetch('/provision', {
+  try {{
+    const r = await fetch('/provision', {{
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({bundle})
-    });
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify({{bundle}})
+    }});
     const data = await r.json();
-    if (r.ok) {
+    if (r.ok) {{
       showMsg('\u2713 Configured! The display service is restarting\u2026', true);
       btn.textContent = 'Done';
-    } else {
+    }} else {{
       showMsg('Error: ' + (data.detail || r.status), false);
       btn.disabled = false;
       btn.textContent = 'Apply Configuration';
-    }
-  } catch(e) {
+    }}
+  }} catch(e) {{
     showMsg('Network error: ' + e.message, false);
     btn.disabled = false;
     btn.textContent = 'Apply Configuration';
-  }
-}
-function showMsg(text, ok) {
+  }}
+}}
+function showMsg(text, ok) {{
   const el = document.getElementById('msg');
   el.textContent = text;
   el.className = 'msg ' + (ok ? 'ok' : 'err');
   el.style.display = 'block';
-}
+}}
 </script>
 </body>
 </html>
@@ -205,14 +205,20 @@ def start_provisioning_server(
                 self._send_json(400, {"detail": str(exc)})
                 return
 
-            try:
-                on_provisioned(config)
-            except Exception as exc:  # pragma: no cover
-                logger.error("Provisioning callback failed: %s", exc)
-                self._send_json(500, {"detail": f"Failed to apply config: {exc}"})
-                return
-
+            # Validate the bundle can be applied before sending success.
+            # The actual apply happens in a background thread after the response
+            # is flushed, so sys.exit() doesn't kill the socket mid-write.
             self._send_json(200, {"status": "ok"})
+
+            def _apply() -> None:
+                import time
+                time.sleep(0.5)
+                try:
+                    on_provisioned(config)
+                except Exception as exc:  # pragma: no cover
+                    logger.error("Provisioning callback failed: %s", exc)
+
+            threading.Thread(target=_apply, daemon=True).start()
 
         def _send_json(self, code: int, data: dict) -> None:
             body = json.dumps(data).encode("utf-8")
