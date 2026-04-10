@@ -45,11 +45,75 @@ class RegistrationState:
     # Path resolution helpers
     # ---------------------------------------------------------------------
     def _resolve_default_state_file(self) -> Path:
-        """Determine an appropriate location for the registration state file."""
+        """Determine an appropriate location for the registration state file.
+
+        Resolution behavior is intentionally compatibility-first:
+        1. Reuse any existing registration_state.json from known legacy/current paths.
+        2. If device_config.json already exists somewhere, store registration_state.json
+           alongside it so the two persistence files stay together.
+        3. Otherwise, fall back to the standard writable-dir resolver.
+        """
+        for candidate in self._candidate_state_files():
+            if candidate.exists():
+                self.logger.info("Using existing registration state file: %s", candidate)
+                return candidate
+
+        sibling_dir = self._detect_device_config_dir()
+        if sibling_dir is not None:
+            self.logger.info("Using registration state directory alongside device config: %s", sibling_dir)
+            return sibling_dir / "registration_state.json"
+
         preferred = os.getenv("MIMIR_STATE_DIR")
         state_dir = resolve_writable_dir(preferred, "registration_state")
         self.logger.info("Using registration state directory: %s", state_dir)
         return Path(state_dir) / "registration_state.json"
+
+    def _candidate_state_files(self) -> list[Path]:
+        candidates: list[Path] = []
+        preferred = os.getenv("MIMIR_STATE_DIR")
+        if preferred:
+            candidates.append(Path(preferred) / "registration_state.json")
+
+        home = Path.home()
+        xdg = os.getenv("XDG_DATA_HOME")
+        if xdg:
+            candidates.append(Path(xdg) / "mimir-display" / "registration_state.json")
+
+        candidates.extend([
+            Path("/var/lib/mimir-display/state/registration_state.json"),
+            Path("/var/lib/mimir-display/registration_state.json"),
+            home / ".mimir" / "registration_state.json",
+            home / ".local" / "share" / "mimir-display" / "registration_state.json",
+            Path("/tmp/mimir-display/registration_state.json"),
+        ])
+
+        seen: set[str] = set()
+        ordered: list[Path] = []
+        for candidate in candidates:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            ordered.append(candidate)
+        return ordered
+
+    def _detect_device_config_dir(self) -> Optional[Path]:
+        candidates: list[Path] = []
+        preferred = os.getenv("MIMIR_STATE_DIR")
+        if preferred:
+            candidates.append(Path(preferred))
+
+        candidates.extend([
+            Path("/var/lib/mimir-display/state"),
+            Path("/var/lib/mimir-display"),
+            Path.home() / ".mimir",
+            Path.home() / ".local" / "share" / "mimir-display",
+        ])
+
+        for directory in candidates:
+            if (directory / "device_config.json").exists():
+                return directory
+        return None
     
     def _load_state(self) -> None:
         """Load registration state from disk."""

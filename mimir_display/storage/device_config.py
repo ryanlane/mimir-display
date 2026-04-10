@@ -29,21 +29,67 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 _FILENAME = "device_config.json"
-_CANDIDATE_DIRS = [
-    Path(os.environ.get("MIMIR_STATE_DIR", "") or "/nonexistent"),
-    Path("/var/lib/mimir-display"),
-    Path.home() / ".mimir",
-]
+
+
+def _candidate_paths() -> list[Path]:
+    candidates: list[Path] = []
+    preferred = os.environ.get("MIMIR_STATE_DIR", "")
+    if preferred:
+        candidates.append(Path(preferred) / _FILENAME)
+
+    home = Path.home()
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        candidates.append(Path(xdg) / "mimir-display" / _FILENAME)
+
+    candidates.extend([
+        Path("/var/lib/mimir-display/state") / _FILENAME,
+        Path("/var/lib/mimir-display") / _FILENAME,
+        home / ".mimir" / _FILENAME,
+        home / ".local" / "share" / "mimir-display" / _FILENAME,
+        Path("/tmp/mimir-display") / _FILENAME,
+    ])
+
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+    return ordered
+
+
+def _detect_registration_state_dir() -> Path | None:
+    for candidate in _candidate_paths():
+        registration_path = candidate.with_name("registration_state.json")
+        if registration_path.exists():
+            return registration_path.parent
+    return None
 
 
 def _resolve_path() -> Path:
-    for d in _CANDIDATE_DIRS:
+    for candidate in _candidate_paths():
+        if candidate.exists():
+            logger.info("Using existing device config file: %s", candidate)
+            return candidate
+
+    sibling_dir = _detect_registration_state_dir()
+    if sibling_dir is not None:
+        path = sibling_dir / _FILENAME
+        logger.info("Using device config directory alongside registration state: %s", sibling_dir)
+        return path
+
+    for path in _candidate_paths():
+        d = path.parent
         try:
             d.mkdir(parents=True, exist_ok=True)
             test = d / ".write_test"
             test.write_text("ok")
             test.unlink(missing_ok=True)
-            return d / _FILENAME
+            logger.info("Using device config directory: %s", d)
+            return path
         except (PermissionError, OSError):
             continue
     fallback = Path.cwd() / _FILENAME
