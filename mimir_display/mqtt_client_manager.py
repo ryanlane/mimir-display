@@ -83,6 +83,25 @@ class MqttDisplayClientManager:
         self.capabilities = get_display_capabilities()
         self._log_startup_summary()
 
+        # Initialize network services
+        self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
+        self.provisioning_server = None
+        self.mdns_service = MDNSService(self)
+
+        # State management
+        self.state: Dict[str, Any] = {}
+        self.stop_event = asyncio.Event()
+        self.force_update_flag = False
+        self.force_refresh_flag = False
+        self._mqtt_config_task: Optional[asyncio.Task] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # Load persistent state
+        self._load_state()
+
+        # Apply persisted MQTT override (if any)
+        self._apply_mqtt_override_from_state()
+
         # Generate a pairing code and store it for MQTT publishing after connection.
         # The code is generated locally so it can appear on the splash before MQTT starts.
         self.pair_code: str = generate_pair_code()
@@ -162,31 +181,6 @@ class MqttDisplayClientManager:
             self.config.mqtt_broker_host or "(unset)",
             self.config.mqtt_broker_port,
         )
-        self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
-        self.provisioning_server = None
-        self.mdns_service = MDNSService(self)
-
-        # State management
-        self.state: Dict[str, Any] = {}
-        self.stop_event = asyncio.Event()
-        self.force_update_flag = False
-        self.force_refresh_flag = False
-        self._mqtt_config_task: Optional[asyncio.Task] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-
-        # Load persistent state
-        self._load_state()
-
-        # Apply persisted MQTT override (if any)
-        self._apply_mqtt_override_from_state()
-
-        # Setup signal handlers (best effort; may be ignored in some environments)
-        # try:
-        #     signal.signal(signal.SIGINT, self._signal_handler)
-        #     signal.signal(signal.SIGTERM, self._signal_handler)
-        # except Exception:
-        #     # Some embedded/running envs won’t allow this; that’s fine.
-        #     pass
 
     @staticmethod
     def _split_tags(tag_str: Optional[str]) -> list[str]:
@@ -564,6 +558,7 @@ class MqttDisplayClientManager:
 
         if reg_token:
             def _start_self_register() -> None:
+                self.logger.info("Provision self-register starting device_id=%s endpoint=%s/api/displays/provision-register", self.mqtt_client.device_id, (self.config.platform_url or self.device_config.platform_url or "").rstrip("/"))
                 self._update_splash_status("Connected — self-registering…")
                 task = asyncio.create_task(self._provision_self_register())
                 task.add_done_callback(self._log_background_task_error)
@@ -592,7 +587,10 @@ class MqttDisplayClientManager:
                 "yes" if reg_token else "no",
                 self.capabilities.get("orientation"),
             )
-            self._render_startup_splash(status_text=self._current_splash_status)
+            if getattr(self.mqtt_client, "_client", None) is None:
+                self._render_startup_splash(status_text=self._current_splash_status)
+            else:
+                self.logger.debug("Skipping startup splash redraw during active MQTT session")
             if changed:
                 await self.mqtt_client.request_reconnect("bootstrap_config")
 
