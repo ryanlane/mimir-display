@@ -16,7 +16,7 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 
-from mimir_display.utils.helpers import resolve_writable_dir
+from mimir_display.utils.helpers import resolve_dot_local_url, resolve_writable_dir
 
 
 class ContentDownloader:
