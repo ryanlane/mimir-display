@@ -48,6 +48,7 @@ class MqttDisplayClientManager:
             base_data_dir = resolve_writable_dir(None, "data_dir")
         self.log_dir = resolve_writable_dir(base_data_dir, "logs", subdir="logs")
         self.logger = setup_logger(self.log_dir, self.config.get("log_level", "INFO"))
+        self._log_startup_marker(stage="boot")
 
         # Set up file system paths
         data_dir_raw = self.config.get("data_dir") or base_data_dir
@@ -80,6 +81,7 @@ class MqttDisplayClientManager:
 
         # Get hardware capabilities after applying any persisted orientation override.
         self.capabilities = get_display_capabilities()
+        self._log_startup_summary()
 
         # Generate a pairing code and store it for MQTT publishing after connection.
         # The code is generated locally so it can appear on the splash before MQTT starts.
@@ -138,6 +140,28 @@ class MqttDisplayClientManager:
         )
 
         # Initialize network services
+
+    def _log_startup_marker(self, *, stage: str) -> None:
+        stage_label = (stage or "startup").strip().upper()
+        border = "=" * 30
+        self.logger.info("%s MIMIR DISPLAY %s %s", border, stage_label, border)
+
+    def _log_startup_summary(self) -> None:
+        resolution = self.capabilities.get("resolution") or ["?", "?"]
+        backend = self.capabilities.get("backend") or "unknown"
+        simulation = bool(self.capabilities.get("simulation_mode"))
+        self.logger.info(
+            "Startup summary hostname=%s display_id=%s backend=%s simulation=%s resolution=%sx%s platform_url=%s mqtt=%s:%s",
+            self.config.hostname,
+            self.config.display_id,
+            backend,
+            simulation,
+            resolution[0],
+            resolution[1],
+            self.config.platform_url or "(unset)",
+            self.config.mqtt_broker_host or "(unset)",
+            self.config.mqtt_broker_port,
+        )
         self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
         self.provisioning_server = None
         self.mdns_service = MDNSService(self)
@@ -539,12 +563,19 @@ class MqttDisplayClientManager:
             orientation_changed = await self._apply_runtime_orientation(display_orientation)
 
         if reg_token:
-            def _on_first_connect_provision() -> None:
+            def _start_self_register() -> None:
                 self._update_splash_status("Connected — self-registering…")
                 task = asyncio.create_task(self._provision_self_register())
                 task.add_done_callback(self._log_background_task_error)
 
-            self.mqtt_client.set_on_first_connect(_on_first_connect_provision)
+            def _on_first_connect_provision() -> None:
+                _start_self_register()
+
+            if getattr(self.mqtt_client, "_client", None) is not None:
+                self.logger.info("Bootstrap config received after MQTT connect; triggering immediate self-register")
+                _start_self_register()
+            else:
+                self.mqtt_client.set_on_first_connect(_on_first_connect_provision)
 
         if changed or persisted or orientation_changed:
             self.state["mqtt_override"] = {
