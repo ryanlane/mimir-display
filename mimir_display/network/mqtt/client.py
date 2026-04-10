@@ -94,8 +94,55 @@ class MqttDisplayClient:
         self._running = False
         self._shutdown = False
 
+        # Make sure presence starts with capabilities and the last known assignment.
+        self._apply_presence_fields()
+
         # Resilience / watchdog configuration (pulled from Config; falls back to defaults)
         self._resilience = self._load_resilience_settings()
+
+    def _presence_capability_fields(self) -> Dict[str, Any]:
+        """Return capability hints that should accompany presence payloads."""
+        capabilities = self.registration.capabilities or {}
+        if not capabilities:
+            return {}
+
+        cap_payload: Dict[str, Any] = {}
+        for key in (
+            "resolution",
+            "native_resolution",
+            "orientation",
+            "rotation_deg",
+            "supported_formats",
+            "redis_distribution",
+            "content_claiming",
+        ):
+            value = capabilities.get(key)
+            if value is not None:
+                cap_payload[key] = value
+
+        fields: Dict[str, Any] = {}
+        if cap_payload:
+            fields["cap"] = cap_payload
+
+        resolution = capabilities.get("resolution")
+        if resolution is not None:
+            fields["res"] = resolution
+
+        orientation = capabilities.get("orientation")
+        if orientation:
+            fields["orientation"] = orientation
+
+        return fields
+
+    def _apply_presence_fields(self) -> None:
+        """Ensure status and heartbeat payloads expose capabilities and assignment state."""
+        fields = self._presence_capability_fields()
+        if self._assigned_scene_id:
+            fields["scene_id"] = self._assigned_scene_id
+        if self._assigned_subchannel_id:
+            fields["subchannel_id"] = self._assigned_subchannel_id
+        if fields:
+            self.presence.set_extra_fields(fields)
 
     def _load_resilience_settings(self) -> Dict[str, Any]:
         """Load resilience configuration from config/env with sane defaults.
@@ -352,6 +399,8 @@ class MqttDisplayClient:
                     # Restart presence with updated topics
                     await self.presence.stop_presence()
                     self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+                    self._apply_presence_fields()
+                    self.commands.set_presence_manager(self.presence)
                     await self.presence.start_presence(client)
                     
                     self.logger.info("Registration complete - now using device ID: %s", self.device_id)
@@ -380,6 +429,8 @@ class MqttDisplayClient:
         self.events.topics = self.topics
         self.commands.topics = self.topics
         self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+        self._apply_presence_fields()
+        self.commands.set_presence_manager(self.presence)
         self.logger.info("Registration cleared: %s -> %s", old_id, self.device_id)
     
     def set_display_callback(self, callback: Callable):
