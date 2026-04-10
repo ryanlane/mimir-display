@@ -92,6 +92,7 @@ class DeviceConfig:
             "platform_url":     "platform_url",
             "display_name":     "display_name",
             "display_location": "display_location",
+            "display_orientation": "display_orientation",
             "mqtt_host":        "mqtt_host",
             "mqtt_port":        "mqtt_port",
             "mqtt_username":    "mqtt_username",
@@ -123,6 +124,7 @@ class DeviceConfig:
             "platform_url": "platform_url",
             "display_name": "display_name",
             "display_location": "display_location",
+            "display_orientation": "display_orientation",
             "host": "mqtt_host",
             "port": "mqtt_port",
             "username": "mqtt_username",
@@ -158,6 +160,10 @@ class DeviceConfig:
     @property
     def display_location(self) -> Optional[str]:
         return self._data.get("display_location")
+
+    @property
+    def display_orientation(self) -> Optional[str]:
+        return self._data.get("display_orientation")
 
     @property
     def mqtt_host(self) -> Optional[str]:

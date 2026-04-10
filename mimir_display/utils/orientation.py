@@ -6,8 +6,13 @@ and compute rotation plus logical resolution to report upstream.
 Environment variable: DISPLAY_ORIENTATION
 Accepted values (case-insensitive):
     landscape       - (default) no rotation applied
+    landscape_up    - alias for landscape
+    landscape_down  - rotate 180°
+    landscape_inverted - alias for landscape_down
     portrait_left   - panel physically rotated CCW 90° (top was original left)
     portrait_right  - panel physically rotated CW 90° (top was original right)
+    portrait_up     - alias for portrait_right
+    portrait_down   - alias for portrait_left
     square          - explicit square semantic (no rotation, width==height)
 
 Auto-detection fallback (when DISPLAY_ORIENTATION is unset):
@@ -49,8 +54,20 @@ def parse_orientation(raw: str | None) -> str:
     if not raw:
         return "landscape"
     val = raw.strip().lower()
-    if val in ("landscape", "portrait_left", "portrait_right", "square"):
-        return val
+    aliases = {
+        "landscape": "landscape",
+        "landscape_up": "landscape",
+        "landscape_down": "landscape_inverted",
+        "landscape_inverted": "landscape_inverted",
+        "portrait": "portrait_right",
+        "portrait_up": "portrait_right",
+        "portrait_right": "portrait_right",
+        "portrait_down": "portrait_left",
+        "portrait_left": "portrait_left",
+        "square": "square",
+    }
+    if val in aliases:
+        return aliases[val]
     return "landscape"
 
 
@@ -81,6 +98,8 @@ def orientation_info(native_w: int, native_h: int, env_value: str | None = None)
 
     if name == "square":
         return OrientationInfo("square", 0, native_w, native_h)
+    if name == "landscape_inverted":
+        return OrientationInfo(name, 180, native_w, native_h)
     if name == "portrait_left":
         return OrientationInfo(name, 90, native_h, native_w)
     if name == "portrait_right":

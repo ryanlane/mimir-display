@@ -22,6 +22,7 @@ from .network.provisioning_server import start_provisioning_server
 from .content import ImageCache, DisplayManager
 from .content.splash import build_splash, generate_pair_code, get_local_ip, overlay_status
 from .hardware import get_display_capabilities
+from .utils.orientation import parse_orientation
 from .utils import setup_logger
 from .utils.helpers import resolve_writable_dir
 from .utils.helpers import sanitize_path
@@ -70,15 +71,15 @@ class MqttDisplayClientManager:
         # Force config display_id to canonical hostname-based slug
         self.config.set('display_id', canonical_id)
 
-        # Get hardware capabilities (after stable id set)
-        self.capabilities = get_display_capabilities()
-
         # Load server-assigned config persisted from a previous pairing/finalize.
         # Only overrides values the user has NOT explicitly set in .env (empty string
         # or default sentinel) so the operator can always override locally.
         from mimir_display.storage.device_config import DeviceConfig
         self.device_config = DeviceConfig()
         self._apply_device_config()
+
+        # Get hardware capabilities after applying any persisted orientation override.
+        self.capabilities = get_display_capabilities()
 
         # Generate a pairing code and store it for MQTT publishing after connection.
         # The code is generated locally so it can appear on the splash before MQTT starts.
@@ -322,6 +323,12 @@ class MqttDisplayClientManager:
         if not dc.is_configured:
             return
 
+        if dc.display_orientation:
+            normalized_orientation = parse_orientation(dc.display_orientation)
+            self.config.set("display_orientation", normalized_orientation)
+            os.environ["DISPLAY_ORIENTATION"] = normalized_orientation
+            self.logger.info("device_config: applied display_orientation=%s", normalized_orientation)
+
         # (value, env var name, config key, default sentinel)
         candidates = [
             (dc.platform_url,     "PLATFORM_URL",       "platform_url",      ""),
@@ -349,6 +356,30 @@ class MqttDisplayClientManager:
             if self.config.get("mqtt_broker_port") == 1883:
                 self.config.set("mqtt_broker_port", dc.mqtt_port)
                 self.logger.info("device_config: applied mqtt_broker_port=%d", dc.mqtt_port)
+
+    async def _apply_runtime_orientation(self, orientation: str) -> bool:
+        normalized = parse_orientation(orientation)
+        current = parse_orientation(self.config.get("display_orientation") or os.environ.get("DISPLAY_ORIENTATION"))
+        if normalized == current and self.capabilities.get("orientation") == normalized:
+            return False
+
+        self.config.set("display_orientation", normalized)
+        os.environ["DISPLAY_ORIENTATION"] = normalized
+        self.capabilities = get_display_capabilities()
+        self.display_manager = DisplayManager(self.capabilities, self.cache_dir, self.logger)
+
+        if getattr(self, "mqtt_client", None):
+            await self.mqtt_client.refresh_runtime_capabilities(self.capabilities)
+        if self.mdns_service and self.mdns_service.is_running():
+            await self.mdns_service.update_properties()
+
+        self.logger.info(
+            "Runtime orientation updated to %s (%sx%s)",
+            normalized,
+            self.capabilities.get("resolution", ["?", "?"])[0],
+            self.capabilities.get("resolution", ["?", "?"])[1],
+        )
+        return True
 
     def _display_default(self):
         """Display default content."""
@@ -483,6 +514,7 @@ class MqttDisplayClientManager:
         password = payload.get("password")
         platform_url = payload.get("platform_url")
         reg_token = payload.get("reg_token")
+        display_orientation = payload.get("display_orientation")
 
         persisted = self.device_config.apply_bootstrap_payload(payload)
 
@@ -502,6 +534,9 @@ class MqttDisplayClientManager:
         if isinstance(platform_url, str) and platform_url and platform_url != self.config.platform_url:
             self.config.set("platform_url", platform_url)
             changed = True
+        orientation_changed = False
+        if isinstance(display_orientation, str) and display_orientation.strip():
+            orientation_changed = await self._apply_runtime_orientation(display_orientation)
 
         if reg_token:
             def _on_first_connect_provision() -> None:
@@ -511,7 +546,7 @@ class MqttDisplayClientManager:
 
             self.mqtt_client.set_on_first_connect(_on_first_connect_provision)
 
-        if changed or persisted:
+        if changed or persisted or orientation_changed:
             self.state["mqtt_override"] = {
                 "host": self.config.mqtt_broker_host,
                 "port": self.config.mqtt_broker_port,
@@ -520,10 +555,11 @@ class MqttDisplayClientManager:
                 self.state["platform_url_override"] = self.config.platform_url
             self._save_state()
             self.logger.info(
-                "Bootstrap config applied: mqtt=%s:%s reg_token=%s",
+                "Bootstrap config applied: mqtt=%s:%s reg_token=%s orientation=%s",
                 self.config.mqtt_broker_host,
                 self.config.mqtt_broker_port,
                 "yes" if reg_token else "no",
+                self.capabilities.get("orientation"),
             )
             self._render_startup_splash(status_text=self._current_splash_status)
             if changed:

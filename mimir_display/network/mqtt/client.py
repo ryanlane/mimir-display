@@ -144,6 +144,14 @@ class MqttDisplayClient:
         if fields:
             self.presence.set_extra_fields(fields)
 
+    async def refresh_runtime_capabilities(self, capabilities: Dict[str, Any]) -> None:
+        """Refresh capabilities used by registration, commands, and presence payloads."""
+        self.registration.capabilities = capabilities or {}
+        self.commands.capabilities = capabilities or {}
+        self._apply_presence_fields()
+        if self._client:
+            await self.presence.publish_status()
+
     def _load_resilience_settings(self) -> Dict[str, Any]:
         """Load resilience configuration from config/env with sane defaults.
 

@@ -43,6 +43,7 @@ class Config:
             "display_id": os.getenv("DISPLAY_ID", ""),  # Empty means use hostname
             "display_name": os.getenv("DISPLAY_NAME", "Inky Display"),
             "display_location": os.getenv("DISPLAY_LOCATION", "Unknown"),
+            "display_orientation": os.getenv("DISPLAY_ORIENTATION", "").strip(),
             "hostname": os.getenv("HOSTNAME", socket.gethostname()),
             "tags": [t.strip() for t in os.getenv("DISPLAY_TAGS", "").split(",") if t.strip()],
             "client_version": os.getenv("CLIENT_VERSION", "1.0.0"),
@@ -83,7 +84,7 @@ class Config:
     def _apply_cli_overrides(self):
         """Apply command-line argument overrides."""
         override_fields = [
-            "platform_url", "display_id", "display_name", "display_location", 
+            "platform_url", "display_id", "display_name", "display_location", "display_orientation",
             "hostname", "tags", "client_version", "default_content_path"
         ]
         
