@@ -62,7 +62,7 @@ Tracked items from the April 2026 code review. Work top-down — earlier items u
 
 ---
 
-## 8. Split `MqttCommandHandler` into domain-focused handlers
+## 8. Split `MqttCommandHandler` into domain-focused handlers ✅
 **File:** `mimir_display/network/mqtt/commands.py` (~680 lines, 10+ command types)  
 **Risk:** Medium — central dispatch wiring needs updating.  
 **Proposed split:**

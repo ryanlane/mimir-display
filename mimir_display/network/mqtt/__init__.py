@@ -3,7 +3,7 @@ from .topics import MqttTopicManager
 from .presence import MqttPresenceManager
 from .registration import MqttRegistrationManager
 from .events import MqttEventPublisher
-from .commands import MqttCommandHandler
+from .commands import MqttCommandHandler, RegistrationCommandHandler, DisplayCommandHandler
 from .client import MqttDisplayClient
 
 __all__ = [
@@ -12,5 +12,7 @@ __all__ = [
     "MqttRegistrationManager",
     "MqttEventPublisher",
     "MqttCommandHandler",
+    "RegistrationCommandHandler",
+    "DisplayCommandHandler",
     "MqttDisplayClient",
 ]

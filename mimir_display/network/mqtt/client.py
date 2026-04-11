@@ -3,6 +3,11 @@ import contextlib
 import hashlib
 import json
 import logging
+import asyncio
+import contextlib
+import hashlib
+import json
+import logging
 import os
 import random
 import socket
@@ -22,18 +27,15 @@ from .commands import MqttCommandHandler
 from mimir_display.config import Config
 from mimir_display.content.downloader import ContentDownloader, AssignmentProcessor
 
+
 class MqttDisplayClient:
     """Main MQTT client for display devices with registration state management and command processing."""
-    
+
     def __init__(self, config: Config, capabilities: Dict[str, Any], metadata: Dict[str, Any], display_callback=None):
-        
         self.config = config
         self.logger = logging.getLogger(__name__)
-        
-        # Initialize device ID - use configured display_id (which falls back to hostname)
+
         self.device_id = config.display_id
-        
-        # Initialize components
         self.topics = MqttTopicManager(self.device_id)
         self.registration = MqttRegistrationManager(
             self.topics,
@@ -41,64 +43,66 @@ class MqttDisplayClient:
             metadata,
         )
 
-        # Initialize content processing
-        self.downloader = ContentDownloader()
-        self.assignment_processor = AssignmentProcessor(self.downloader, display_callback)
-
-        # Initialize other managers with potentially updated topics
-        self.presence = MqttPresenceManager(self.topics, config.mqtt_heartbeat_interval)
-        self.events = MqttEventPublisher(self.topics)
-        self.commands = MqttCommandHandler(self.topics, self.assignment_processor, capabilities, metadata, self.device_id, config.get('platform_url'))
-
-        # Initialize scene management
-        self._assigned_scene_id: Optional[str] = None
-        self._assigned_subchannel_id: Optional[str] = None
-        self._state_path = self._derive_state_path()  # e.g., <data_dir>/device_state.json
-        # Extended local state (loaded in _load_local_state)
-        self._assignment_meta: Dict[str, Any] = {}
-        self._load_local_state()
-
-        # Make sure presence starts with the scene_id and subchannel_id if we have them
-        if self._assigned_scene_id:
-            fields = {"scene_id": self._assigned_scene_id}
-            if self._assigned_subchannel_id:
-                fields["subchannel_id"] = self._assigned_subchannel_id
-            self.presence.set_extra_fields(fields)
-        
-
-        # Check if we have a previous registration and use the assigned ID
         if self.registration.is_registered():
             effective_id = self.registration.get_effective_device_id()
             self.device_id = effective_id
             self.topics = MqttTopicManager(effective_id)
             self.logger.info("Using registered device ID: %s", effective_id)
-        
-               
-        # Wire up event publisher to command handler
+
+        self.downloader = ContentDownloader()
+        self.assignment_processor = AssignmentProcessor(self.downloader, display_callback)
+        self._last_mqtt_activity = time.monotonic()
+
+        self.presence = self._build_presence_manager(self.topics)
+        self.events = MqttEventPublisher(self.topics)
+        self.commands = MqttCommandHandler(
+            self.topics,
+            self.assignment_processor,
+            capabilities,
+            metadata,
+            self.device_id,
+            config.get('platform_url'),
+        )
+
+        self._assigned_scene_id: Optional[str] = None
+        self._assigned_subchannel_id: Optional[str] = None
+        self._state_path = self._derive_state_path()
+        self._assignment_meta: Dict[str, Any] = {}
+        self._load_local_state()
+
+        if self._assigned_scene_id:
+            fields = {"scene_id": self._assigned_scene_id}
+            if self._assigned_subchannel_id:
+                fields["subchannel_id"] = self._assigned_subchannel_id
+            self.presence.set_extra_fields(fields)
+
         self.commands.set_event_publisher(self.events)
         self.commands.set_presence_manager(self.presence)
-        # after wiring event publisher & commands:
         self.commands.set_scene_callbacks(self.set_scene_id, self.clear_scene_id)
         self.commands.set_registration_manager(self.registration)
 
-        # Pairing code (set externally before run_discovery_listener starts)
         self._pair_code: Optional[str] = None
-
-        # Optional one-shot callback fired the first time MQTT connects successfully
         self._on_first_connect: Optional[Callable[[], None]] = None
         self._first_connect_fired = False
         self._on_pair_status: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
-        # State
         self._client: Optional[Client] = None
         self._running = False
         self._shutdown = False
 
-        # Make sure presence starts with capabilities and the last known assignment.
         self._apply_presence_fields()
-
-        # Resilience / watchdog configuration (pulled from Config; falls back to defaults)
         self._resilience = self._load_resilience_settings()
+
+    def _record_mqtt_activity(self, reason: str) -> None:
+        self._last_mqtt_activity = time.monotonic()
+        self.logger.debug("MQTT activity recorded: %s", reason)
+
+    def _build_presence_manager(self, topics: MqttTopicManager) -> MqttPresenceManager:
+        return MqttPresenceManager(
+            topics,
+            self.config.mqtt_heartbeat_interval,
+            activity_callback=self._record_mqtt_activity,
+        )
 
     def _presence_capability_fields(self) -> Dict[str, Any]:
         """Return capability hints that should accompany presence payloads."""
@@ -166,14 +170,13 @@ class MqttDisplayClient:
         """
         get = self.config.get
 
-        # Helper to read env with fallbacks, allowing either env var or config key (lowercase form)
         def _num(env_key: str, cfg_key: str, default: float, cast):
             raw = os.getenv(env_key.upper())
             if raw is None:
                 raw = get(cfg_key, default)
             try:
                 return cast(raw)
-            except Exception:  # noqa: BLE001 - defensive; fallback to default
+            except Exception:
                 self.logger.warning(
                     "Invalid value for %s=%r falling back to default %.2f", env_key, raw, default
                 )
@@ -189,7 +192,6 @@ class MqttDisplayClient:
             'idle_error': _num('MQTT_WATCHDOG_IDLE_ERROR', 'mqtt_watchdog_idle_error', 120.0, float),
         }
 
-        # Clamp / sanity adjustments
         if settings['jitter_frac'] < 0 or settings['jitter_frac'] > 1:
             self.logger.warning(
                 "mqtt_reconnect_jitter out of range (0..1) %.2f -> clamping", settings['jitter_frac']
@@ -219,20 +221,18 @@ class MqttDisplayClient:
         return settings
 
     def _derive_state_path(self) -> str:
-        # Try to use your configured data dir; fall back to /tmp
         base = getattr(self.config, "data_dir", None) or "/tmp/mimir_display"
         os.makedirs(base, exist_ok=True)
         return os.path.join(base, "device_state.json")
-    
+
     def _load_local_state(self):
         """Load previously persisted assignment state (if any)."""
         try:
-            if os.path.exists(self._state_path):  # noqa: BLE001 - defensive load
+            if os.path.exists(self._state_path):
                 with open(self._state_path, encoding="utf-8") as f:
                     data = json.load(f)
                 self._assigned_scene_id = data.get("scene_id")
                 self._assigned_subchannel_id = data.get("subchannel_id")
-                # Preserve any meta fields (assignment_id, applied_at, version, etc.)
                 self._assignment_meta = {
                     k: v for k, v in data.items() if k not in {"scene_id", "subchannel_id"}
                 }
@@ -243,7 +243,7 @@ class MqttDisplayClient:
                     self._assignment_meta or None,
                 )
         except Exception as e:
-            self.logger.debug("Failed to load local assignment state: %s", e, exc_info=True)  # noqa: BLE001
+            self.logger.debug("Failed to load local assignment state: %s", e, exc_info=True)
 
     def _persist_assignment_state(self):
         """Atomically persist current assignment state + metadata to disk."""
@@ -258,11 +258,11 @@ class MqttDisplayClient:
                 json.dump(payload, f, indent=2)
             os.replace(tmp_path, self._state_path)
         except Exception:
-            self.logger.debug("Failed to persist device state", exc_info=True)  # noqa: BLE001
+            self.logger.debug("Failed to persist device state", exc_info=True)
             try:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     async def set_scene_id(
@@ -274,8 +274,6 @@ class MqttDisplayClient:
         source: str = "command",
     ):
         """Set (or update) the current scene assignment and republish status.
-
-        Adds metadata: assignment_id, applied_at, source, version.
         Republish status only if changed (scene_id or subchannel_id differences) to reduce noise.
         """
         changed = (
@@ -406,7 +404,7 @@ class MqttDisplayClient:
                     
                     # Restart presence with updated topics
                     await self.presence.stop_presence()
-                    self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+                    self.presence = self._build_presence_manager(self.topics)
                     self._apply_presence_fields()
                     self.commands.set_presence_manager(self.presence)
                     await self.presence.start_presence(client)
@@ -436,7 +434,7 @@ class MqttDisplayClient:
         # Update all components
         self.events.topics = self.topics
         self.commands.topics = self.topics
-        self.presence = MqttPresenceManager(self.topics, self.config.mqtt_heartbeat_interval)
+        self.presence = self._build_presence_manager(self.topics)
         self._apply_presence_fields()
         self.commands.set_presence_manager(self.presence)
         self.logger.info("Registration cleared: %s -> %s", old_id, self.device_id)
@@ -511,6 +509,7 @@ class MqttDisplayClient:
                         self.config.mqtt_broker_host,
                         self.config.mqtt_broker_port,
                     )
+                    self._record_mqtt_activity("connect")
                     if not self._first_connect_fired and self._on_first_connect:
                         self._first_connect_fired = True
                         try:
@@ -520,6 +519,7 @@ class MqttDisplayClient:
                     self.commands.set_mqtt_client(client)
 
                     await client.subscribe(self.topics.commands, qos=1)
+                    self._record_mqtt_activity("subscribe_commands")
                     self.logger.info("Subscribed commands_topic=%s", self.topics.commands)
 
                     # Publish pair code so the server can store it for user claiming.
@@ -527,6 +527,7 @@ class MqttDisplayClient:
                         try:
                             ack_topic = self.topics.pair_ack
                             await client.subscribe(ack_topic, qos=1)
+                            self._record_mqtt_activity("subscribe_pair_ack")
                             payload = json.dumps({
                                 "device_id": self.device_id,
                                 "code": self._pair_code,
@@ -537,6 +538,7 @@ class MqttDisplayClient:
                             await client.publish(
                                 self.topics.pair_request(), payload, qos=1
                             )
+                            self._record_mqtt_activity("publish_pair_request")
                             self.logger.info(
                                 "Pair request published code=%s ack_topic=%s",
                                 self._pair_code, ack_topic,
@@ -545,12 +547,12 @@ class MqttDisplayClient:
                             self.logger.warning("Failed to publish pair request: %s", _pair_err)
 
                     # --- Watchdog setup ---
-                    last_activity = time.monotonic()
+                    self._record_mqtt_activity("watchdog_start")
 
                     async def watchdog():  # pragma: no cover - timing based
                         while True:
                             await asyncio.sleep(cfg['watchdog_interval'])
-                            idle = time.monotonic() - last_activity
+                            idle = time.monotonic() - self._last_mqtt_activity
                             if idle > cfg['idle_error']:
                                 self.logger.error(
                                     "MQTT idle gap exceeded error threshold idle=%.1fs warn=%.1fs error=%.1fs",
@@ -567,7 +569,7 @@ class MqttDisplayClient:
 
                     try:
                         async for message in client.messages:
-                            last_activity = time.monotonic()  # activity mark
+                            self._record_mqtt_activity("incoming_message")
                             try:
                                 topic_str = str(getattr(message, 'topic', ''))
                                 if self._pair_code and topic_str == self.topics.pair_ack:
