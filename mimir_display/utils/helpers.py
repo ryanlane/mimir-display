@@ -24,7 +24,7 @@ import os
 import socket
 import sys
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 
@@ -284,7 +284,7 @@ def parse_iso8601(ts: str) -> Optional[datetime]:
         return None
 
 
-def resolve_dot_local_url(url: str) -> Tuple[str, Optional[str]]:
+def resolve_dot_local_url(url: str) -> tuple[str, str | None]:
     """Resolve an mDNS .local hostname in a URL to its IP address.
 
     Many environments (Docker, some Linux network stacks) cannot resolve

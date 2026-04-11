@@ -1,8 +1,5 @@
-import asyncio
-import contextlib
-import hashlib
-import json
-import logging
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import hashlib
@@ -14,7 +11,7 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from aiomqtt import Client
 
@@ -31,7 +28,7 @@ from mimir_display.content.downloader import ContentDownloader, AssignmentProces
 class MqttDisplayClient:
     """Main MQTT client for display devices with registration state management and command processing."""
 
-    def __init__(self, config: Config, capabilities: Dict[str, Any], metadata: Dict[str, Any], display_callback=None):
+    def __init__(self, config: Config, capabilities: dict[str, Any], metadata: dict[str, Any], display_callback=None):
         self.config = config
         self.logger = logging.getLogger(__name__)
 
@@ -67,7 +64,7 @@ class MqttDisplayClient:
         self._assigned_scene_id: Optional[str] = None
         self._assigned_subchannel_id: Optional[str] = None
         self._state_path = self._derive_state_path()
-        self._assignment_meta: Dict[str, Any] = {}
+        self._assignment_meta: dict[str, Any] = {}
         self._load_local_state()
 
         if self._assigned_scene_id:
@@ -84,7 +81,7 @@ class MqttDisplayClient:
         self._pair_code: Optional[str] = None
         self._on_first_connect: Optional[Callable[[], None]] = None
         self._first_connect_fired = False
-        self._on_pair_status: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self._on_pair_status: Optional[Callable[[str, dict[str, Any]], None]] = None
 
         self._client: Optional[Client] = None
         self._running = False
@@ -104,13 +101,13 @@ class MqttDisplayClient:
             activity_callback=self._record_mqtt_activity,
         )
 
-    def _presence_capability_fields(self) -> Dict[str, Any]:
+    def _presence_capability_fields(self) -> dict[str, Any]:
         """Return capability hints that should accompany presence payloads."""
         capabilities = self.registration.capabilities or {}
         if not capabilities:
             return {}
 
-        cap_payload: Dict[str, Any] = {}
+        cap_payload: dict[str, Any] = {}
         for key in (
             "resolution",
             "native_resolution",
@@ -124,7 +121,7 @@ class MqttDisplayClient:
             if value is not None:
                 cap_payload[key] = value
 
-        fields: Dict[str, Any] = {}
+        fields: dict[str, Any] = {}
         if cap_payload:
             fields["cap"] = cap_payload
 
@@ -148,7 +145,7 @@ class MqttDisplayClient:
         if fields:
             self.presence.set_extra_fields(fields)
 
-    async def refresh_runtime_capabilities(self, capabilities: Dict[str, Any]) -> None:
+    async def refresh_runtime_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Refresh capabilities used by registration, commands, and presence payloads."""
         self.registration.capabilities = capabilities or {}
         self.commands.capabilities = capabilities or {}
@@ -156,7 +153,7 @@ class MqttDisplayClient:
         if self._client:
             await self.presence.publish_status()
 
-    def _load_resilience_settings(self) -> Dict[str, Any]:
+    def _load_resilience_settings(self) -> dict[str, Any]:
         """Load resilience configuration from config/env with sane defaults.
 
         Available (all optional):
@@ -381,12 +378,12 @@ class MqttDisplayClient:
                 try:
                     await self.presence.stop_presence()
                 except Exception as e:
-                    self.logger.debug(f"stop_presence failed: {e}")
+                    self.logger.debug("stop_presence failed: %s", e)
                 self.events.set_client(None)
 
         self.logger.info("MQTT connection closed")
     
-    async def register(self) -> Optional[Dict[str, Any]]:
+    async def register(self) -> Optional[dict[str, Any]]:
         """Register device with the service, updating state and topics as needed."""
         async with self.connection() as client:
             response = await self.registration.register_device(client)
@@ -417,7 +414,7 @@ class MqttDisplayClient:
         """Check if device is currently registered."""
         return self.registration.is_registered()
     
-    def get_registration_summary(self) -> Dict[str, Any]:
+    def get_registration_summary(self) -> dict[str, Any]:
         """Get registration status summary."""
         return self.registration.get_registration_summary()
     
@@ -444,7 +441,7 @@ class MqttDisplayClient:
         self.assignment_processor.display_callback = callback
         self.logger.info("Display callback updated")
     
-    def get_cache_info(self) -> Dict[str, Any]:
+    def get_cache_info(self) -> dict[str, Any]:
         """Get information about the content cache."""
         return self.downloader.get_cache_info()
     
@@ -465,7 +462,7 @@ class MqttDisplayClient:
         self._on_first_connect = callback
         self._first_connect_fired = False
 
-    def set_on_pair_status(self, callback: Callable[[str, Dict[str, Any]], None]) -> None:
+    def set_on_pair_status(self, callback: Callable[[str, dict[str, Any]], None]) -> None:
         """Register a callback invoked when the server acks the pair code."""
         self._on_pair_status = callback
 
@@ -684,7 +681,7 @@ class MqttDisplayClient:
         elif event_type == "error":
             await self.events.publish_error(**kwargs)
         else:
-            self.logger.warning(f"Unknown event type: {event_type}")
+            self.logger.warning("Unknown event type: %s", event_type)
 
     async def aclose(self):
         """Public async close to signal shutdown and close active connection.

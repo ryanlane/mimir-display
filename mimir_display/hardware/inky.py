@@ -12,7 +12,7 @@ import os
 import sys
 import traceback
 import logging
-from typing import Tuple
+from __future__ import annotations
 from mimir_display.utils.orientation import orientation_info
 
 # Add current directory to path for eframe_inky import
@@ -62,7 +62,7 @@ except ImportError as e:
         return True
 
 
-def get_display_resolution() -> Tuple[int, int]:
+def get_display_resolution() -> tuple[int, int]:
     """
     Get the resolution of the connected Inky display.
     

@@ -47,7 +47,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         logging system rather than going to stderr.
         """
         if hasattr(self, 'display_client') and self.display_client:
-            self.display_client.logger.debug(f"Webhook: {format % args}")
+            self.display_client.logger.debug("Webhook: %s", format % args)
     
     def do_POST(self):
         """

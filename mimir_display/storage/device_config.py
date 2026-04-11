@@ -23,7 +23,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ class DeviceConfig:
 
     def __init__(self, path: Optional[Path] = None) -> None:
         self._path = path or _resolve_path()
-        self._data: Dict[str, Any] = {}
+        self._data: dict[str, Any] = {}
         self._load()
 
     # ------------------------------------------------------------------ I/O
@@ -128,9 +128,9 @@ class DeviceConfig:
 
     # ------------------------------------------------------------------ update
 
-    def apply_finalize_payload(self, payload: Dict[str, Any]) -> None:
+    def apply_finalize_payload(self, payload: dict[str, Any]) -> None:
         """Merge the config block from a finalize_registration command."""
-        cfg: Dict[str, Any] = payload.get("config") or {}
+        cfg: dict[str, Any] = payload.get("config") or {}
         if not cfg:
             return
 
@@ -161,7 +161,7 @@ class DeviceConfig:
                 {k: v for k, v in self._data.items() if "password" not in k},
             )
 
-    def apply_bootstrap_payload(self, payload: Dict[str, Any]) -> bool:
+    def apply_bootstrap_payload(self, payload: dict[str, Any]) -> bool:
         """Persist a webhook/bootstrap config payload using the same config keys."""
         if not isinstance(payload, dict) or not payload:
             return False

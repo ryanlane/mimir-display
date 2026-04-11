@@ -17,11 +17,13 @@ Enhancement (2025-09-23):
     The code gracefully falls back if a path is not writable and logs the decision.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
 from datetime import datetime, timezone
 
 from mimir_display.utils.helpers import resolve_writable_dir
@@ -38,7 +40,7 @@ class RegistrationState:
         self.logger = logging.getLogger(__name__)
         # Resolve path with new precedence & fallbacks
         self.state_file = state_file or self._resolve_default_state_file()
-        self._state: Dict[str, Any] = {}
+        self._state: dict[str, Any] = {}
         self._load_state()
 
     # ---------------------------------------------------------------------
@@ -97,7 +99,7 @@ class RegistrationState:
             ordered.append(candidate)
         return ordered
 
-    def _detect_device_config_dir(self) -> Optional[Path]:
+    def _detect_device_config_dir(self) -> Path | None:
         candidates: list[Path] = []
         preferred = os.getenv("MIMIR_STATE_DIR")
         if preferred:
@@ -121,9 +123,9 @@ class RegistrationState:
             try:
                 with open(self.state_file, 'r') as f:
                     self._state = json.load(f)
-                self.logger.debug(f"Loaded registration state from {self.state_file}")
+                self.logger.debug("Loaded registration state from %s", self.state_file)
             except Exception as e:
-                self.logger.warning(f"Failed to load registration state: {e}")
+                self.logger.warning("Failed to load registration state: %s", e)
                 self._state = {}
         else:
             self.logger.debug("No existing registration state found")
@@ -135,9 +137,9 @@ class RegistrationState:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.state_file, 'w') as f:
                 json.dump(self._state, f, indent=2)
-            self.logger.debug(f"Saved registration state to {self.state_file}")
+            self.logger.debug("Saved registration state to %s", self.state_file)
         except Exception as e:
-            self.logger.error(f"Failed to save registration state: {e}")
+            self.logger.error("Failed to save registration state: %s", e)
     
     @property
     def is_registered(self) -> bool:
@@ -145,22 +147,22 @@ class RegistrationState:
         return bool(self._state.get('assigned_id') and self._state.get('registration_timestamp'))
     
     @property
-    def assigned_id(self) -> Optional[str]:
+    def assigned_id(self) -> str | None:
         """Get the assigned device ID from service."""
         return self._state.get('assigned_id')
     
     @property
-    def device_id(self) -> Optional[str]:
+    def device_id(self) -> str | None:
         """Get the original device ID used for registration."""
         return self._state.get('device_id')
     
     @property
-    def registration_timestamp(self) -> Optional[str]:
+    def registration_timestamp(self) -> str | None:
         """Get the registration timestamp."""
         return self._state.get('registration_timestamp')
     
     @property
-    def service_config(self) -> Dict[str, Any]:
+    def service_config(self) -> dict[str, Any]:
         """Get service-provided configuration."""
         return self._state.get('service_config', {})
     
@@ -168,7 +170,7 @@ class RegistrationState:
         self,
         device_id: str,
         assigned_id: str,
-        service_config: Dict[str, Any] = None
+        service_config: dict[str, Any] = None
     ) -> None:
         """Update registration state with successful registration."""
         self._state.update({
@@ -179,14 +181,14 @@ class RegistrationState:
             'last_updated': datetime.now(timezone.utc).isoformat()
         })
         self._save_state()
-        self.logger.info(f"Updated registration: {device_id} -> {assigned_id}")
+        self.logger.info("Updated registration: %s -> %s", device_id, assigned_id)
     
     def clear_registration(self) -> None:
         """Clear registration state (device needs to re-register)."""
         old_assigned_id = self._state.get('assigned_id')
         self._state = {}
         self._save_state()
-        self.logger.info(f"Cleared registration state for {old_assigned_id}")
+        self.logger.info("Cleared registration state for %s", old_assigned_id)
     
     def update_heartbeat_config(self, heartbeat_interval: int) -> None:
         """Update heartbeat configuration from service."""
@@ -196,7 +198,7 @@ class RegistrationState:
         self._state['last_updated'] = datetime.now(timezone.utc).isoformat()
         self._save_state()
     
-    def get_state_summary(self) -> Dict[str, Any]:
+    def get_state_summary(self) -> dict[str, Any]:
         """Get a summary of current registration state."""
         return {
             'is_registered': self.is_registered,
@@ -206,7 +208,7 @@ class RegistrationState:
             'service_config': self.service_config
         }
     
-    def _get_registration_age_hours(self) -> Optional[float]:
+    def _get_registration_age_hours(self) -> float | None:
         """Get the age of registration in hours."""
         if not self.registration_timestamp:
             return None

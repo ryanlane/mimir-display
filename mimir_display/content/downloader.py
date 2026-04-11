@@ -5,6 +5,8 @@ Handles downloading content from URLs with SHA256 validation and caching.
 Supports the URL-based approach recommended in the migration plan.
 """
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import logging
@@ -12,7 +14,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import aiohttp
 
@@ -98,7 +100,7 @@ class ContentDownloader:
         except Exception:
             return removed
         if removed:
-            self.logger.info(f"Removed {removed} stale temp files from cache")
+            self.logger.info("Removed %d stale temp files from cache", removed)
         return removed
         
     # Note: _normalize_delivery implemented later in class (single source of truth)
@@ -139,12 +141,12 @@ class ContentDownloader:
             if expected_sha:
                 actual_sha = self._sha256_file(cache_path)
                 if actual_sha == expected_sha:
-                    self.logger.debug(f"Cache hit for {content_id} ({expected_sha[:8]}...)")
+                    self.logger.debug("Cache hit for %s (%s...)", content_id, expected_sha[:8])
                     return cache_path
                 else:
-                    self.logger.warning(f"Cache SHA mismatch for {content_id}, re-downloading")
+                    self.logger.warning("Cache SHA mismatch for %s, re-downloading", content_id)
             else:
-                self.logger.debug(f"Cache hit for {content_id} (no SHA validation)")
+                self.logger.debug("Cache hit for %s (no SHA validation)", content_id)
                 return cache_path
         
         # Download the file
@@ -175,14 +177,14 @@ class ContentDownloader:
                     temp_path.unlink()  # Clean up invalid file
                     raise ValueError(f"SHA256 mismatch: expected {expected_sha}, got {actual_sha}")
                 
-                self.logger.debug(f"SHA256 validation passed for {content_id}")
+                self.logger.debug("SHA256 validation passed for %s", content_id)
             
             # Move to final location
             temp_path.rename(cache_path)
             
             duration = (datetime.now() - start_time).total_seconds()
             file_size = cache_path.stat().st_size
-            self.logger.info(f"Downloaded {content_id}: {file_size} bytes in {duration:.2f}s")
+            self.logger.info("Downloaded %s: %d bytes in %.2fs", content_id, file_size, duration)
             # After successful download, optionally prune temp artifacts
             try:
                 self._cleanup_stale_temps(max_age_seconds=600)
@@ -196,10 +198,10 @@ class ContentDownloader:
             if temp_path.exists():
                 temp_path.unlink()
             
-            self.logger.error(f"Download failed for {content_id}: {e}")
+            self.logger.error("Download failed for %s: %s", content_id, e)
             raise
     
-    def get_cache_info(self) -> Dict[str, Any]:
+    def get_cache_info(self) -> dict[str, Any]:
         """Get information about the current cache."""
         if not self.cache_dir.exists():
             return {"total_files": 0, "total_size": 0, "cache_dir": str(self.cache_dir)}
@@ -241,14 +243,14 @@ class ContentDownloader:
                 file_path.unlink()
                 removed_count += 1
             except Exception as e:
-                self.logger.warning(f"Failed to remove cache file {file_path}: {e}")
+                self.logger.warning("Failed to remove cache file %s: %s", file_path, e)
         
         if removed_count > 0:
-            self.logger.info(f"Cleared {removed_count} files from content cache")
+            self.logger.info("Cleared %d files from content cache", removed_count)
         
         return removed_count
 
-    def _normalize_delivery(self, assignment: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize_delivery(self, assignment: dict[str, Any]) -> dict[str, Any]:
         """Accept several payload shapes and return a unified delivery dict."""
         a = assignment or {}
 
@@ -278,7 +280,7 @@ class AssignmentProcessor:
         self.display_callback = display_callback  # Function to call with processed content
         self.logger = logging.getLogger(__name__)
     
-    async def process_assignment(self, assignment: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_assignment(self, assignment: dict[str, Any]) -> dict[str, Any]:
         """
         Process an assignment command and return result info.
         
@@ -339,7 +341,7 @@ class AssignmentProcessor:
                     display_result = await self._call_display_callback(content_path, display_config)
                     result["display_result"] = display_result
                 except Exception as e:
-                    self.logger.error(f"Display callback failed for {assignment_id}: {e}")
+                    self.logger.error("Display callback failed for %s: %s", assignment_id, e)
                     result["display_error"] = str(e)
             
             # Enforce small cache footprint: keep only last/current/next (3 most recent)
@@ -362,7 +364,7 @@ class AssignmentProcessor:
                 "processed_at": datetime.now(timezone.utc).isoformat()
             }
     
-    async def _call_display_callback(self, content_path: Path, display_config: Dict[str, Any]):
+    async def _call_display_callback(self, content_path: Path, display_config: dict[str, Any]):
         """Call the display callback function."""
         if asyncio.iscoroutinefunction(self.display_callback):
             return await self.display_callback(content_path, display_config)

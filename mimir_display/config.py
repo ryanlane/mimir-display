@@ -6,9 +6,11 @@ for the display client, including environment variables, CLI arguments,
 and persistent settings.
 """
 
+from __future__ import annotations
+
 import os
 import socket
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
 from .utils.helpers import env_str, env_int, env_float
 
 
@@ -36,7 +38,7 @@ class Config:
         if args:
             self._apply_cli_overrides()
     
-    def _load_base_config(self) -> Dict[str, Any]:
+    def _load_base_config(self) -> dict[str, Any]:
         """Load base configuration from environment variables."""
         return {
             "platform_url": os.getenv("PLATFORM_URL", "").strip(),
@@ -105,11 +107,11 @@ class Config:
         """Set configuration value."""
         self._config[key] = value
     
-    def update(self, updates: Dict[str, Any]):
+    def update(self, updates: dict[str, Any]):
         """Update multiple configuration values."""
         self._config.update(updates)
     
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return configuration as dictionary."""
         return self._config.copy()
     
@@ -130,7 +132,7 @@ class Config:
         return self._config["hostname"]
     
     @property
-    def tags(self) -> List[str]:
+    def tags(self) -> list[str]:
         return self._config["tags"]
     
     @property

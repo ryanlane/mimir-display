@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Optional, Any
+from typing import Any, Optional
 from .topics import MqttTopicManager
 
 
@@ -65,11 +67,11 @@ class MqttEventPublisher:
         
         await self._publish_event(payload)
     
-    async def _publish_event(self, payload: Dict[str, Any]):
+    async def _publish_event(self, payload: dict[str, Any]):
         """Publish event to the events topic."""
         if not self._client:
             self.logger.error("No MQTT client available for event publishing")
             return
         
         await self._client.publish(self.topics.events, json.dumps(payload), qos=0)
-        self.logger.debug(f"Published event: {payload['type']}")
+        self.logger.debug("Published event: %s", payload["type"])

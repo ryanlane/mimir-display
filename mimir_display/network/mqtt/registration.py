@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Optional, Any
+from typing import Any
 from .topics import MqttTopicManager
 from aiomqtt import Client
 
@@ -11,13 +13,13 @@ from mimir_display.storage.registration import RegistrationState
 class MqttRegistrationManager:
     """Handles device registration via MQTT with persistent state."""
     
-    def __init__(self, topics: MqttTopicManager, capabilities: Dict[str, Any], metadata: Dict[str, Any]):
+    def __init__(self, topics: MqttTopicManager, capabilities: dict[str, Any], metadata: dict[str, Any]):
         self.topics = topics
         self.capabilities = capabilities
         self.metadata = metadata
         self.logger = logging.getLogger(__name__)
         self.state = RegistrationState()
-        self._registration_response: Optional[Dict[str, Any]] = None
+        self._registration_response: dict[str, Any] | None = None
     
     def is_registered(self) -> bool:
         """Check if device is currently registered with valid state."""
@@ -27,11 +29,11 @@ class MqttRegistrationManager:
         """Get the device ID to use for MQTT topics (assigned_id if available)."""
         return self.state.assigned_id or self.topics.device_id
     
-    async def register_device(self, client: Client) -> Optional[Dict[str, Any]]:
+    async def register_device(self, client: Client) -> dict[str, Any] | None:
         """Register device and wait for response, updating persistent state."""
         # Subscribe to registration reply
         await client.subscribe(self.topics.registration_reply, qos=1)
-        self.logger.info(f"Subscribed to registration replies at {self.topics.registration_reply}")
+        self.logger.info("Subscribed to registration replies at %s", self.topics.registration_reply)
         
         # Send registration request
         registration_payload = {
@@ -47,7 +49,7 @@ class MqttRegistrationManager:
             json.dumps(registration_payload), 
             qos=1
         )
-        self.logger.info(f"Sent registration request for device {self.topics.device_id}")
+        self.logger.info("Sent registration request for device %s", self.topics.device_id)
         
         # Wait for response (with timeout)
         try:
@@ -73,7 +75,7 @@ class MqttRegistrationManager:
                     self.topics.device_id = assigned_id
                     self.topics.base = f"mimir/{assigned_id}"
                     
-                    self.logger.info(f"Registration successful: {assigned_id}")
+                    self.logger.info("Registration successful: %s", assigned_id)
                     return response
                 else:
                     self.logger.error("Registration response missing assigned_id")
@@ -83,16 +85,16 @@ class MqttRegistrationManager:
             self.logger.error("Registration timeout - no response received")
             return None
     
-    async def _wait_for_registration_response(self, client: Client) -> Optional[Dict[str, Any]]:
+    async def _wait_for_registration_response(self, client: Client) -> dict[str, Any] | None:
         """Wait for registration response message."""
         async for message in client.messages:
             if message.topic.value == self.topics.registration_reply:
                 try:
                     response = json.loads(message.payload.decode())
-                    self.logger.info(f"Received registration response: {response}")
+                    self.logger.info("Received registration response: %s", response)
                     return response
                 except json.JSONDecodeError as e:
-                    self.logger.error(f"Invalid registration response JSON: {e}")
+                    self.logger.error("Invalid registration response JSON: %s", e)
                     continue
         return None
     
@@ -101,6 +103,6 @@ class MqttRegistrationManager:
         self.state.clear_registration()
         self.logger.info("Registration state cleared")
     
-    def get_registration_summary(self) -> Dict[str, Any]:
+    def get_registration_summary(self) -> dict[str, Any]:
         """Get summary of current registration status."""
         return self.state.get_state_summary()

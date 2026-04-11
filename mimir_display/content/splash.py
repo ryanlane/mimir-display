@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import secrets
 import socket
-from typing import Optional, Tuple
+from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -251,7 +251,7 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> Tuple[int, int]:
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
     """Pillow-version-agnostic text size helper."""
     try:
         bb = draw.textbbox((0, 0), text, font=font)

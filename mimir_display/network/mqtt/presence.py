@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import socket
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Optional
 
 from aiomqtt import Client
 
@@ -25,15 +27,15 @@ class MqttPresenceManager:
         self.logger = logging.getLogger(__name__)
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._client: Optional[Client] = None
-        self._extra_fields: Dict[str, Any] = {}
+        self._extra_fields: dict[str, Any] = {}
         self._activity_callback = activity_callback
 
-    def set_extra_fields(self, fields: Dict[str, Any]):
+    def set_extra_fields(self, fields: dict[str, Any]):
         """Merge extra fields (e.g., {'scene_id': 'abc123'}) into status/heartbeat."""
         self._extra_fields.update(fields or {})
-        self.logger.debug(f"Updated extra fields: {self._extra_fields}")
+        self.logger.debug("Updated extra fields: %s", self._extra_fields)
 
-    def _merge_extra(self, base: Dict[str, Any]) -> Dict[str, Any]:
+    def _merge_extra(self, base: dict[str, Any]) -> dict[str, Any]:
         out = dict(base)
         for key, value in (self._extra_fields or {}).items():
             if value is not None:
@@ -64,7 +66,7 @@ class MqttPresenceManager:
         })
         await self._client.publish(self.topics.status, json.dumps(payload), qos=1, retain=True)
         self._note_activity("presence_status")
-        self.logger.info(f"Republished online status to {self.topics.status}")
+        self.logger.info("Republished online status to %s", self.topics.status)
 
     async def start_presence(self, client: Client):
         """Start presence management with online status and heartbeat."""
@@ -78,7 +80,7 @@ class MqttPresenceManager:
         })
         await client.publish(self.topics.status, json.dumps(online_payload), qos=1, retain=True)
         self._note_activity("presence_online")
-        self.logger.info(f"Published online status to {self.topics.status}")
+        self.logger.info("Published online status to %s", self.topics.status)
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
     async def stop_presence(self, reason: str = "graceful_shutdown"):
@@ -102,9 +104,9 @@ class MqttPresenceManager:
                 })
                 await self._client.publish(self.topics.status, json.dumps(offline_payload), qos=1, retain=True)
                 self._note_activity("presence_offline")
-                self.logger.info(f"Published offline status: {reason}")
+                self.logger.info("Published offline status: %s", reason)
             except Exception as exc:
-                self.logger.debug(f"Unable to publish offline status: {exc}")
+                self.logger.debug("Unable to publish offline status: %s", exc)
 
         self._client = None
 
@@ -117,12 +119,12 @@ class MqttPresenceManager:
                     "device_id": self.topics.device_id,
                     "uptime": time.time(),
                 })
-                self.logger.debug(f"Publishing heartbeat: {heartbeat_payload}")
+                self.logger.debug("Publishing heartbeat: %s", heartbeat_payload)
                 await self._client.publish(self.topics.heartbeat, json.dumps(heartbeat_payload), qos=0)
                 self._note_activity("presence_heartbeat")
-                self.logger.debug(f"Heartbeat sent at {datetime.now().strftime('%H:%M:%S')}")
+                self.logger.debug("Heartbeat sent at %s", datetime.now().strftime("%H:%M:%S"))
                 await asyncio.sleep(self.heartbeat_interval)
         except asyncio.CancelledError:
             self.logger.debug("Heartbeat loop cancelled")
         except Exception as exc:
-            self.logger.error(f"Heartbeat loop error: {exc}")
+            self.logger.error("Heartbeat loop error: %s", exc)

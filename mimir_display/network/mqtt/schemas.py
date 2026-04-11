@@ -1,4 +1,6 @@
-from typing import TypedDict, Optional, Literal, Dict, Any
+from __future__ import annotations
+
+from typing import Any, Literal, Optional, TypedDict
 
 class DeliverySpec(TypedDict, total=False):
     type: Literal["url", "inline"]
@@ -9,7 +11,7 @@ class DeliverySpec(TypedDict, total=False):
 
 class ContentSpec(TypedDict, total=False):
     delivery: DeliverySpec
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
 class AssignCommand(TypedDict, total=False):
     type: Literal["assign"]
@@ -17,7 +19,7 @@ class AssignCommand(TypedDict, total=False):
     sequence: Optional[int]
     scene_id: str
     scene_name: str
-    display: Dict[str, Any]
+    display: dict[str, Any]
     content: ContentSpec
     timestamp: str
     # New scheduling hints (server >= added feature):

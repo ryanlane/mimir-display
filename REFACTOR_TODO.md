@@ -71,7 +71,7 @@ Tracked items from the April 2026 code review. Work top-down — earlier items u
 
 ---
 
-## 9. Split `MqttDisplayClientManager` into focused classes
+## 9. Split `MqttDisplayClientManager` into focused classes ✅
 **File:** `mimir_display/mqtt_client_manager.py` (~760 lines)  
 **Risk:** High — touches the main execution path. Do last, after smaller items reduce surface area.  
 **Proposed split:**
@@ -81,7 +81,7 @@ Tracked items from the April 2026 code review. Work top-down — earlier items u
 
 ---
 
-## 10. Standardize logging format and type hints
+## 10. Standardize logging format and type hints ✅
 **Risk:** None — cosmetic only.  
 **Action:**
 - Pick `%`-style logging throughout (lazy evaluation, no f-strings in log calls)
