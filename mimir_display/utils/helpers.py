@@ -197,58 +197,94 @@ def resolve_writable_dir(preferred: Optional[str], purpose: str, subdir: Optiona
     raise RuntimeError(f"Unable to establish writable directory for {purpose}; attempted: {tried}")
 
 
-def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
+class _ColorFormatter(logging.Formatter):
+    """ANSI-color formatter for TTY output (direct terminal or SSH)."""
+
+    _RESET = "\033[0m"
+    _LEVEL_STYLES = {
+        logging.DEBUG:    "\033[2m",        # dim
+        logging.INFO:     "\033[36m",       # cyan
+        logging.WARNING:  "\033[33m",       # yellow
+        logging.ERROR:    "\033[31m",       # red
+        logging.CRITICAL: "\033[1;31m",     # bold red
+    }
+    _DIM = "\033[2m"
+
+    def format(self, record: logging.LogRecord) -> str:
+        color = self._LEVEL_STYLES.get(record.levelno, "")
+        timestamp = self.formatTime(record, "%H:%M:%S")
+        msg = record.getMessage()
+        if record.exc_info:
+            msg += "\n" + self.formatException(record.exc_info)
+        return (
+            f"{self._DIM}{timestamp}{self._RESET} "
+            f"{color}[{record.levelname}]{self._RESET} "
+            f"{msg}"
+        )
+
+
+class _JournaldFormatter(logging.Formatter):
+    """Prepends syslog priority prefix so journald records the correct level.
+
+    journalctl then colours by priority automatically:
+      CRITICAL/ERROR → red, WARNING → yellow, INFO → normal, DEBUG → dim
     """
-    Set up logging for the display client.
-    
-    Creates a logger that outputs to both console (stdout) and a log file.
-    The logger is configured with timestamps and appropriate formatting.
-    
-    Args:
-        log_dir: Directory where log files should be stored
-        level: Logging level (DEBUG, INFO, WARN, ERROR)
-        
-    Returns:
-        Configured logger instance
-        
-    Note:
-        If the logger is already configured, returns the existing instance
-        to avoid duplicate handlers.
+
+    _SD_PREFIX = {
+        logging.CRITICAL: "<2>",
+        logging.ERROR:    "<3>",
+        logging.WARNING:  "<4>",
+        logging.INFO:     "<6>",
+        logging.DEBUG:    "<7>",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        prefix = self._SD_PREFIX.get(record.levelno, "<6>")
+        return prefix + super().format(record)
+
+
+def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
+    """Set up logging for the display client.
+
+    - TTY (direct terminal or SSH): ANSI-colored output.
+    - Non-TTY (systemd/journald pipe): syslog priority prefixes so
+      ``journalctl`` colours by level automatically.
+    - File handler always writes plain text.
     """
     log_dir = sanitize_path(log_dir)
     ensure_dir(log_dir)
     logger = logging.getLogger("display_client")
     if logger.handlers:
         return logger  # already configured
-    
-    # Map string levels to logging constants
+
     level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARN": logging.WARN,
-        "WARNING": logging.WARN,
-        "ERROR": logging.ERROR,
+        "DEBUG":   logging.DEBUG,
+        "INFO":    logging.INFO,
+        "WARN":    logging.WARNING,
+        "WARNING": logging.WARNING,
+        "ERROR":   logging.ERROR,
     }
     logger.setLevel(level_map.get(level.upper(), logging.INFO))
-    
-    # Create formatter for consistent log format
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
-    
-    # Console handler for real-time monitoring
+
+    plain_fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+    # Console handler — pick formatter based on whether stdout is a TTY
     ch = logging.StreamHandler(sys.stdout)
-    ch.setFormatter(fmt)
+    if sys.stdout.isatty():
+        ch.setFormatter(_ColorFormatter())
+    else:
+        ch.setFormatter(_JournaldFormatter("%(asctime)s [%(levelname)s] %(message)s"))
     logger.addHandler(ch)
-    
-    # File handler for persistent logging; fall back gracefully on permission issues
+
+    # File handler — always plain text, no escape codes
     try:
         fh = logging.FileHandler(os.path.join(log_dir, "display_client.log"))
     except (OSError, PermissionError) as e:
-        # We keep console logging only.
         logger.warning("File logging disabled (path=%s): %s", log_dir, e)
     else:
-        fh.setFormatter(fmt)
+        fh.setFormatter(plain_fmt)
         logger.addHandler(fh)
-    
+
     return logger
 
 
