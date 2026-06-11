@@ -1,0 +1,69 @@
+name: Release client artifact
+
+# Tagging vX.Y.Z builds the OTA artifact and attaches it to a GitHub Release:
+#   - mimir_display-X.Y.Z.tar.gz   (sdist; what displays install)
+#   - mimir_display-X.Y.Z-py3-none-any.whl
+#   - manifest.json                (version, sha256, min_server_version)
+#
+# After this completes: bump `display-client:` in mimir-release/versions.yml.
+# The server caches the artifact and rolls it out to the fleet (Phase 2/3).
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag matches pyproject version
+        run: |
+          PKG_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::pyproject version ($PKG_VERSION) != tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Generate manifest.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SDIST="dist/mimir_display-${VERSION}.tar.gz"
+          python - <<EOF
+          import hashlib, json, os
+          sdist = "${SDIST}"
+          sha = hashlib.sha256(open(sdist, "rb").read()).hexdigest()
+          manifest = {
+              "name": "mimir-display",
+              "version": "${VERSION}",
+              "artifact": os.path.basename(sdist),
+              "sha256": sha,
+              # Oldest server release this client version is compatible with.
+              # Bump when the MQTT/HTTP contract changes.
+              "min_server_version": "0.0.0",
+          }
+          json.dump(manifest, open("dist/manifest.json", "w"), indent=2)
+          print(json.dumps(manifest, indent=2))
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+            dist/manifest.json
+          generate_release_notes: true
