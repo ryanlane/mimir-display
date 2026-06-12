@@ -360,6 +360,37 @@ At startup the client will:
 1. (Optional) Render a diagnostic gradient pattern when `STARTUP_TEST_PATTERN=1` and backend is HyperPixel.
 2. Render a centered startup logo (`startup.png` or custom `STARTUP_LOGO_PATH`).
 
+## Over-the-Air Updates (OTA)
+
+Once a display has run one deploy that includes the OTA updater (installed
+automatically by `update_display.sh`), it updates itself:
+
+1. The server publishes the pinned client version on the retained MQTT topic
+   `mimir/fleet/desired_version` (sourced from `versions.yml` via the server's
+   release cache — displays download from the server, not the internet).
+2. The (unprivileged) client evaluates it — canary-phase rollouts only apply
+   to displays whose `DISPLAY_TAGS` include `canary` — and writes
+   `/var/lib/mimir-display/ota/request.json`.
+3. The root-owned `mimir-display-updater.path` unit fires `scripts/ota_update.sh`:
+   download → sha256 verify → install into `/opt/mimir-display/releases/vX.Y.Z/`
+   (own venv) → health check → flip the `current` symlink → restart → verify.
+   On any failure the previous version keeps running and the failure is
+   reported in the display's presence payload (visible in the web UI).
+
+Useful bits:
+
+```bash
+journalctl -u mimir-display-updater -n 50    # updater log on the device
+cat /var/lib/mimir-display/ota/status.json   # last update outcome
+OTA_PIP_EXTRAS=inky                          # .env override for install extras
+                                             # (defaults map from DISPLAY_BACKEND)
+```
+
+The retained topic re-delivers on every MQTT (re)connect, so displays that
+were offline catch up automatically. A failed update retries on the next
+reconnect after a 1-hour backoff. Rollback of the whole fleet = pin the older
+version in `versions.yml`.
+
 ## Updating an Existing Installation
 
 The simplest path from your dev machine:

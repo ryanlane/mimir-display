@@ -23,6 +23,7 @@ from .commands import MqttCommandHandler
 
 from mimir_display.config import Config
 from mimir_display.content.downloader import ContentDownloader, AssignmentProcessor
+from mimir_display.ota import OtaUpdateManager
 
 
 class MqttDisplayClient:
@@ -48,6 +49,7 @@ class MqttDisplayClient:
 
         self.downloader = ContentDownloader()
         self.assignment_processor = AssignmentProcessor(self.downloader, display_callback)
+        self._ota = OtaUpdateManager(config)
         self._last_mqtt_activity = time.monotonic()
 
         self.presence = self._build_presence_manager(self.topics)
@@ -144,11 +146,25 @@ class MqttDisplayClient:
         # display and drive OTA rollouts (PLAN.md Phase 2/3).
         fields["client_version"] = CLIENT_VERSION
         fields["protocol_version"] = PROTOCOL_VERSION
+        try:
+            fields.update(self._ota.presence_fields())
+        except Exception as exc:  # noqa: BLE001 — presence must never fail on OTA state
+            self.logger.debug("OTA presence fields unavailable: %s", exc)
         if self._assigned_scene_id:
             fields["scene_id"] = self._assigned_scene_id
         if self._assigned_subchannel_id:
             fields["subchannel_id"] = self._assigned_subchannel_id
         self.presence.set_extra_fields(fields)
+
+    def _handle_fleet_desired(self, payload: dict[str, Any]) -> None:
+        """Evaluate a fleet desired_version message (retained topic)."""
+        try:
+            wrote = self._ota.handle_desired_version(payload)
+            if wrote:
+                # Refresh presence so the server/UI sees the pending update.
+                self._apply_presence_fields()
+        except Exception as exc:  # noqa: BLE001 — OTA must never break the listener
+            self.logger.warning("OTA desired_version handling failed: %s", exc)
 
     async def refresh_runtime_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Refresh capabilities used by registration, commands, and presence payloads."""
@@ -524,6 +540,11 @@ class MqttDisplayClient:
                     self._record_mqtt_activity("subscribe_commands")
                     self.logger.info("Subscribed commands_topic=%s", self.topics.commands)
 
+                    # Fleet OTA: retained topic re-delivers on every connect,
+                    # so offline displays catch up without polling.
+                    await client.subscribe("mimir/fleet/desired_version", qos=1)
+                    self._record_mqtt_activity("subscribe_fleet")
+
                     # Publish pair code so the server can store it for user claiming.
                     if self._pair_code:
                         try:
@@ -596,6 +617,13 @@ class MqttDisplayClient:
                                         # Either way, stop re-publishing on reconnect — the
                                         # splash already shows the code and the server has it.
                                         self._pair_code = None
+                                elif topic_str == "mimir/fleet/desired_version":
+                                    try:
+                                        desired = json.loads(message.payload)
+                                    except Exception:
+                                        desired = None
+                                    if isinstance(desired, dict):
+                                        self._handle_fleet_desired(desired)
                                 else:
                                     await self.commands.handle_command_message(message)
                             except Exception as e:  # noqa: BLE001 - includes CancelledError check

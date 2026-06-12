@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for Mimir Display OTA update requests
+
+[Path]
+# Written by the (unprivileged) display client when the server's retained
+# desired_version topic indicates an applicable update.
+PathExists=/var/lib/mimir-display/ota/request.json
+
+[Install]
+WantedBy=multi-user.target

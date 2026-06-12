@@ -328,4 +328,12 @@ elif [[ $HEALTH_CHECK == 1 ]]; then
   echo "DRY_RUN: would run health check"
 fi
 
+# Install/refresh the OTA updater units (Phase 3) so future updates are
+# fully automatic — this makes the current manual deploy the last one needed.
+if [[ $DRY_RUN == 0 && -f "$INSTALL_DIR/scripts/install_ota_updater.sh" ]]; then
+  info "Installing/refreshing OTA updater units"
+  INSTALL_DIR="$INSTALL_DIR" SERVICE_NAME="$SERVICE_NAME" \
+    bash "$INSTALL_DIR/scripts/install_ota_updater.sh" || warn "OTA updater install failed (display still works; OTA disabled)"
+fi
+
 info "Update complete"
