@@ -44,11 +44,13 @@ from mimir_display.utils.orientation import orientation_info
 FB_PATH = os.getenv("HDMI_FRAMEBUFFER", "/dev/fb0")
 SYSFS_BASE = "/sys/class/graphics/fb0"
 
-_FORCE_BPP_ENV = os.getenv("HDMI_FORCE_BPP")
-try:
-    _FORCE_BPP = int(_FORCE_BPP_ENV) if _FORCE_BPP_ENV else None
-except ValueError:
-    _FORCE_BPP = None
+def _env_force_bpp() -> int | None:
+    """Read HDMI_FORCE_BPP at call time (import-time snapshots break env overrides)."""
+    raw = os.getenv("HDMI_FORCE_BPP")
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        return None
 
 _SEQ_8888 = os.getenv("HDMI_8888_SEQ", "BGRX").upper().strip()
 if len(_SEQ_8888) != 4 or any(c not in "RGBAX" for c in _SEQ_8888):
@@ -60,16 +62,24 @@ except ValueError:
     _LOG_FIRST = 0
 _LOGGED_ONCE = False
 
-_OVERRIDE_RES = os.getenv("HDMI_RESOLUTION")
-if _OVERRIDE_RES and "x" in _OVERRIDE_RES:
-    try:
-        _OV_W, _OV_H = [int(p) for p in _OVERRIDE_RES.lower().split("x", 1)]
-    except Exception:
-        _OV_W = _OV_H = None
-else:
-    _OV_W = _OV_H = None
+def _env_override_resolution() -> tuple[int | None, int | None]:
+    """Read HDMI_RESOLUTION at call time (import-time snapshots break env overrides)."""
+    raw = os.getenv("HDMI_RESOLUTION")
+    if raw and "x" in raw:
+        try:
+            w, h = (int(p) for p in raw.lower().split("x", 1))
+            return w, h
+        except Exception:
+            return None, None
+    return None, None
+
+
+def _geom_env_key() -> tuple[str | None, str | None]:
+    return (os.getenv("HDMI_RESOLUTION"), os.getenv("HDMI_FORCE_BPP"))
+
 
 _cached_geom: tuple[int, int, int] | None = None  # w,h,bpp
+_cached_geom_key: tuple[str | None, str | None] | None = None
 _cached_stride: int | None = None
 
 _FILL_MODE = os.getenv("HDMI_FILL_MODE", "contain").strip().lower()
@@ -86,11 +96,14 @@ def _read_sysfs(path: str) -> str | None:
 
 
 def _detect_geometry() -> tuple[int, int, int]:
-    global _cached_geom
-    if _cached_geom is not None:
+    global _cached_geom, _cached_geom_key, _cached_stride
+    env_key = _geom_env_key()
+    if _cached_geom is not None and _cached_geom_key == env_key:
         return _cached_geom
-    if _OV_W and _OV_H:
-        w, h = _OV_W, _OV_H
+    _cached_stride = None  # stride derives from geometry; recompute alongside it
+    ov_w, ov_h = _env_override_resolution()
+    if ov_w and ov_h:
+        w, h = ov_w, ov_h
     else:
         virt = _read_sysfs(f"{SYSFS_BASE}/virtual_size")
         w = h = 0
@@ -102,8 +115,9 @@ def _detect_geometry() -> tuple[int, int, int]:
                 w = h = 0
         if w <= 0 or h <= 0:
             w, h = 1280, 720  # generic fallback
-    if _FORCE_BPP in (16, 24, 32):
-        bpp = _FORCE_BPP
+    force_bpp = _env_force_bpp()
+    if force_bpp in (16, 24, 32):
+        bpp = force_bpp
     else:
         bpp_txt = _read_sysfs(f"{SYSFS_BASE}/bits_per_pixel")
         try:
@@ -111,6 +125,7 @@ def _detect_geometry() -> tuple[int, int, int]:
         except Exception:
             bpp = 32
     _cached_geom = (w, h, bpp)
+    _cached_geom_key = env_key
     return _cached_geom
 
 
@@ -298,7 +313,7 @@ def get_display_capabilities() -> dict:
         "backend": "hdmi",
         "bpp_mode": bpp,
         "format_8888_seq": _SEQ_8888 if bpp != 16 else None,
-        "forced_bpp": _FORCE_BPP,
+        "forced_bpp": _env_force_bpp(),
         "framebuffer": {
             "path": FB_PATH,
             "stride": stride,
