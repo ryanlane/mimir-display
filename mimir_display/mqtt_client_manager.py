@@ -121,11 +121,16 @@ class MqttDisplayClientManager:
                     self.logger.debug("Startup test pattern failed: %s", e, exc_info=True)
 
         # Create metadata for registration
+        from mimir_display.version import CLIENT_VERSION, PROTOCOL_VERSION
+
         self.metadata = {
             "name": self.config.display_name,
             "location": self.config.display_location,
             "hostname": self.config.hostname,
-            "client_version": self.config.get("client_version", "1.0.0"),
+            # Real installed package version (matches the release tag), not a
+            # config value — the server fleet panel and OTA rely on this.
+            "client_version": CLIENT_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
             "tags": self._split_tags(self.config.get("display_tags")),
         }
 

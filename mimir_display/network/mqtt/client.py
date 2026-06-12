@@ -137,13 +137,18 @@ class MqttDisplayClient:
 
     def _apply_presence_fields(self) -> None:
         """Ensure status and heartbeat payloads expose capabilities and assignment state."""
+        from mimir_display.version import CLIENT_VERSION, PROTOCOL_VERSION
+
         fields = self._presence_capability_fields()
+        # Version reporting: lets the server/UI show what's deployed per
+        # display and drive OTA rollouts (PLAN.md Phase 2/3).
+        fields["client_version"] = CLIENT_VERSION
+        fields["protocol_version"] = PROTOCOL_VERSION
         if self._assigned_scene_id:
             fields["scene_id"] = self._assigned_scene_id
         if self._assigned_subchannel_id:
             fields["subchannel_id"] = self._assigned_subchannel_id
-        if fields:
-            self.presence.set_extra_fields(fields)
+        self.presence.set_extra_fields(fields)
 
     async def refresh_runtime_capabilities(self, capabilities: dict[str, Any]) -> None:
         """Refresh capabilities used by registration, commands, and presence payloads."""

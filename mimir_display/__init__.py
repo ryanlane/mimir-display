@@ -11,10 +11,12 @@ Main Components:
 - Hardware abstraction: Display hardware interfaces
 """
 
-__version__ = "2.0.0-mqtt"
+from .version import CLIENT_VERSION, PROTOCOL_VERSION
+
+__version__ = CLIENT_VERSION  # single source of truth: package metadata / pyproject
 __author__ = "Mimir Team"
 
 from .config import Config
 from .mqtt_client_manager import MqttDisplayClientManager
 
-__all__ = ["MqttDisplayClientManager", "Config"]
+__all__ = ["MqttDisplayClientManager", "Config", "CLIENT_VERSION", "PROTOCOL_VERSION"]

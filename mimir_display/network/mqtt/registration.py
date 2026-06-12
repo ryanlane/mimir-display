@@ -36,10 +36,14 @@ class MqttRegistrationManager:
         self.logger.info("Subscribed to registration replies at %s", self.topics.registration_reply)
         
         # Send registration request
+        from mimir_display.version import CLIENT_VERSION, PROTOCOL_VERSION
+
         registration_payload = {
             "device_id": self.topics.device_id,
             "capabilities": self.capabilities,
             "metadata": self.metadata,
+            "client_version": CLIENT_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
             "reply_to": self.topics.registration_reply,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
