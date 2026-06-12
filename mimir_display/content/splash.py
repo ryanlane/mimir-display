@@ -22,10 +22,12 @@ from PIL import Image, ImageDraw, ImageFont
 PAIR_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
+# Kept high-contrast on purpose: e-ink panels dither mid-tones and saturated
+# colours (like the old purple accent) into mush, so key text stays near-black.
 _BG     = (255, 255, 255)
 _FG     = (20,  20,  20)
-_ACCENT = (80,  60,  200)   # purple accent matching the web UI
-_GRAY   = (130, 130, 130)
+_ACCENT = (80,  60,  200)   # purple accent matching the web UI (decorative only)
+_GRAY   = (70,  70,  70)
 _RULE   = (200, 200, 210)
 
 
@@ -51,7 +53,7 @@ def get_local_ip() -> str:
 
 def _status_bar_h(W: int, H: int) -> int:
     """Height in pixels reserved at the bottom for the status bar."""
-    small_fs = max(8, min(W, H) // 28)
+    small_fs = max(10, min(W, H) // 22)
     return small_fs + 16
 
 
@@ -105,10 +107,13 @@ def build_splash(
     draw.rectangle([(0, H_eff), (width, height)], fill=(235, 235, 240))
     draw.line([(0, H_eff), (width, H_eff)], fill=_RULE, width=1)
 
-    code_fs  = max(14, min(width, H_eff) // 8)
-    small_fs = max(8,  min(width, H_eff) // 28)
+    # The pair code is the most important element on screen: start large and
+    # shrink until it fits the column it will be drawn in.
+    code_max_w = (width // 2 - pad * 2) if (not is_portrait and not is_square) else (width - pad * 2)
+    code_fs  = max(14, min(width, H_eff) // 5)
+    small_fs = max(10, min(width, H_eff) // 22)
 
-    code_font  = _load_font(code_fs,  bold=True)
+    code_font  = _fit_font(draw, pair_code, code_fs, code_max_w, bold=True)
     small_font = _load_font(small_fs, bold=False)
 
     logo_img = _load_logo(logo_path, width, H_eff, is_portrait, is_square, pad)
@@ -149,8 +154,8 @@ def _draw_status_text(
         fg = (255, 255, 255)
         draw.rectangle([(0, H - sb_h), (W, H)], fill=bg)
     else:
-        fg = _ACCENT
-    y = H - sb_h + (sb_h - max(8, min(W, H) // 28)) // 2
+        fg = _FG
+    y = H - sb_h + (sb_h - max(10, min(W, H) // 22)) // 2
     _draw_text_centered(draw, W // 2, y, text, font, fg)
 
 
@@ -166,12 +171,14 @@ def _load_logo(
         return None
     try:
         img = Image.open(logo_path).convert("RGBA")
+        # The logo is branding, not information: keep it small so the QR code
+        # and pairing text get the screen space.
         if is_portrait:
-            max_w, max_h = W - pad * 2, H // 5
+            max_w, max_h = (W - pad * 2) // 2, H // 10
         elif is_square:
-            max_w, max_h = W // 2 - pad * 2, H // 4
+            max_w, max_h = (W // 2 - pad * 2) // 2, H // 8
         else:
-            max_w, max_h = W // 2 - pad * 2, H - pad * 2
+            max_w, max_h = (W // 2 - pad * 2) // 2, (H - pad * 2) // 2
         img.thumbnail((max_w, max_h), Image.LANCZOS)
         return img
     except Exception:
@@ -185,11 +192,11 @@ def _make_qr_image(
     pad: int,
 ) -> Image.Image:
     if is_portrait:
-        target = min(W - pad * 4, H // 3)
+        target = min(W - pad * 4, (H * 2) // 5)
     elif is_square:
-        target = min(W // 2 - pad * 2, H // 3)
+        target = min(W // 2 - pad * 2, (H * 2) // 5)
     else:
-        target = min(H - pad * 6, W // 3 - pad * 2)
+        target = min(H - pad * 4, W // 2 - pad * 3)
 
     target = max(80, target)
     box_size = max(2, target // 25)
@@ -229,6 +236,22 @@ def _make_qr_image(
     return qr_pil
 
 
+def _fit_font(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    size: int,
+    max_w: int,
+    bold: bool = False,
+) -> ImageFont.ImageFont:
+    """Load a font at `size`, shrinking until `text` fits within max_w."""
+    while size > 12:
+        font = _load_font(size, bold=bold)
+        if _text_size(draw, text, font)[0] <= max_w:
+            return font
+        size = max(12, int(size * 0.9))
+    return _load_font(size, bold=bold)
+
+
 def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf" if bold
@@ -252,10 +275,15 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
 
 
 def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
-    """Pillow-version-agnostic text size helper."""
+    """Pillow-version-agnostic text size helper.
+
+    Height is measured from the draw origin to the glyph bottom (not the tight
+    bbox height): stacked layouts advance by this value, and the tight height
+    omits the origin-to-glyph-top gap, which makes large lines overlap.
+    """
     try:
         bb = draw.textbbox((0, 0), text, font=font)
-        return bb[2] - bb[0], bb[3] - bb[1]
+        return bb[2] - bb[0], bb[3]
     except AttributeError:
         return draw.textsize(text, font=font)  # type: ignore[attr-defined]
 
@@ -352,7 +380,7 @@ def _layout_landscape(
     ip_y   = H - pad - code_h - pad // 2 - ip_h
     code_y = H - pad - code_h
     _draw_text_centered(draw, left_cx, ip_y,   ip_text, small_font, _GRAY)
-    _draw_text_centered(draw, left_cx, code_y, code,    code_font,  _ACCENT)
+    _draw_text_centered(draw, left_cx, code_y, code,    code_font,  _FG)
 
     # ── Right half ────────────────────────────────────────────────────────────
     # Centre QR; place label below it, leaving at least pad above the bottom
@@ -403,7 +431,7 @@ def _layout_portrait(
                              small_font, _GRAY) + pad // 2
 
     # Pair code
-    y += _draw_text_centered(draw, W // 2, y, code, code_font, _ACCENT) + pad // 2
+    y += _draw_text_centered(draw, W // 2, y, code, code_font, _FG) + pad // 2
 
     # IP
     _draw_text_centered(draw, W // 2, y, "IP: " + ip, small_font, _GRAY)
@@ -435,7 +463,7 @@ def overlay_status(
 
     W, H = img.size
     sb_h = _status_bar_h(W, H)
-    small_fs = max(8, min(W, H) // 28)
+    small_fs = max(10, min(W, H) // 22)
     font = _load_font(small_fs, bold=False)
     draw = ImageDraw.Draw(img)
 
@@ -482,7 +510,7 @@ def _layout_square(
     y = mid_y + pad
 
     # Code
-    y += _draw_text_centered(draw, W // 2, y, code, code_font, _ACCENT) + pad // 2
+    y += _draw_text_centered(draw, W // 2, y, code, code_font, _FG) + pad // 2
 
     # Label
     y += _draw_text_centered(draw, W // 2, y,

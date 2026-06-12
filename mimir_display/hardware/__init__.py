@@ -21,17 +21,20 @@ from typing import Any
 from .loader import load_backend
 
 _backend_mod: Any | None = None
+_backend_key: str | None = None
 
 
 def _ensure_backend():
-    global _backend_mod
-    if _backend_mod is not None:
-        return _backend_mod
+    global _backend_mod, _backend_key
     # Environment variable DISPLAY_BACKEND may be 'auto' – treat as None to force autodetect
     explicit = os.environ.get("DISPLAY_BACKEND")
     if explicit == "auto":  # normalize sentinel
         explicit = None
+    requested_key = explicit or "<auto>"
+    if _backend_mod is not None and _backend_key == requested_key:
+        return _backend_mod
     _backend_mod = load_backend(explicit)
+    _backend_key = requested_key
     return _backend_mod
 
 

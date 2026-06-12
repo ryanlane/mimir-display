@@ -14,8 +14,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .mqtt_client_manager import run_mqtt_discovery_mode
 from .hardware.loader import load_backend
+from .mqtt_client_manager import run_mqtt_discovery_mode
 
 # Add the parent directory to sys.path for development
 project_root = Path(__file__).parent.parent
@@ -204,7 +204,7 @@ def _start_health_http_server(caps_provider, port: int, logger: logging.Logger) 
     logger.info("Health server listening on port %s (GET /health)", port)
 
 
-def main():
+def main() -> int:
     """
     Synchronous entrypoint that works in both contexts:
     - If no event loop is running: uses asyncio.run(runner()).
@@ -217,7 +217,7 @@ def main():
 
     if getattr(args, 'diagnose_env', False):
         code = diagnose_environment()
-        sys.exit(code)
+        return code
 
     # Load backend (early so capabilities are available for downstream services)
     selected_backend = None
@@ -238,7 +238,7 @@ def main():
     if getattr(args, 'health', False):
         payload, exit_code = _health_status(caps)
         print(json.dumps(payload, indent=2))
-        sys.exit(exit_code)
+        return exit_code
 
     # Optional health server
     if getattr(args, 'health_server', False):
@@ -253,23 +253,24 @@ def main():
             asyncio.run(runner())
         except KeyboardInterrupt:
             logger.info("Interrupted")
-            sys.exit(130)
+            return 130
         except RuntimeError as e:  # pragma: no cover - defensive
             # On some Python versions a late signal during startup can surface
             # as a 'no running event loop' error while shutting down. Treat as clean exit.
             if 'no running event loop' in str(e).lower():
                 logger.debug("Suppressed benign shutdown RuntimeError: %s", e)
-                sys.exit(0)
+                return 0
             raise
         else:
-            sys.exit(0)
+            return 0
     else:
         # A loop is already running (e.g., inside uvicorn/Jupyter).
         # We cannot call asyncio.run(); instead schedule the task and return.
         logger.info("Event loop already running; scheduling runner() as a background task.")
         loop.create_task(runner())
         # Do NOT sys.exit() here; let the hosting process manage lifecycle.
+        return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

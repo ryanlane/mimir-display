@@ -25,7 +25,12 @@ def test_cli_accepts_hdmi(monkeypatch):
 
     monkeypatch.setattr(entry, "load_backend", fake_load_backend)
 
+    async def _fake_runner() -> None:
+        return None
+
+    monkeypatch.setattr(entry, "runner", _fake_runner)
+
     try:
-        entry.main()
+        assert entry.main() == 0
     finally:
         sys.argv = argv_backup

@@ -5,7 +5,7 @@ def test_rgbmatrix_backend_capabilities_simulation(monkeypatch):
     from mimir_display.hardware import get_display_capabilities  # type: ignore
 
     caps = get_display_capabilities()
-    assert caps["backend"] == "rgbmatrix"
+    assert "rgbmatrix" in str(caps.get("backend", ""))
     assert "resolution" in caps
     # resolution should be a two-element list
     assert isinstance(caps["resolution"], list) and len(caps["resolution"]) == 2

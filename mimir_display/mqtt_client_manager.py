@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 MQTT-based Display Client implementation (discovery mode only).
 
@@ -7,27 +5,28 @@ This module provides an MQTT-only display client that operates in discovery mode
 It is PURE-ASYNC: there is NO asyncio.run(...) here. Loop driving happens in the top-level entrypoint.
 """
 
+from __future__ import annotations
+
 import asyncio
 import contextlib
 import json
 import os
-from typing import Any, Optional
+import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Optional
 
+from .bootstrap_manager import BootstrapManager
 from .config import Config
-import re
-from .network.mqtt_client import MqttDisplayClient
-from .network import WebhookServer, MDNSService
-from .content import ImageCache, DisplayManager
+from .content import DisplayManager, ImageCache
 from .content.splash import generate_pair_code
 from .hardware import get_display_capabilities
-from .utils.orientation import parse_orientation
-from .utils import setup_logger
-from .utils.helpers import resolve_writable_dir
-from .utils.helpers import sanitize_path
+from .network import MDNSService, WebhookServer
+from .network.mqtt import MqttDisplayClient
 from .splash_renderer import SplashRenderer
-from .bootstrap_manager import BootstrapManager
+from .utils import setup_logger
+from .utils.helpers import resolve_writable_dir, sanitize_path
+from .utils.orientation import parse_orientation
 
 
 class MqttDisplayClientManager:
@@ -396,8 +395,8 @@ class MqttDisplayClientManager:
     # ------------------------------------------------------------------
 
     async def start_services(self):
-        from .network.provisioning_server import start_provisioning_server
         from .content.splash import get_local_ip
+        from .network.provisioning_server import start_provisioning_server
 
         mdns_ok = False
         try:
