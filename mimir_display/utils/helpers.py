@@ -24,21 +24,20 @@ import os
 import socket
 import sys
 from datetime import datetime
-from typing import Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
 
-def env_str(key: str, default: Optional[str] = None) -> str:
+def env_str(key: str, default: str | None = None) -> str:
     """
     Get a string value from environment variables.
-    
+
     Args:
         key: Environment variable name
         default: Default value if not found
-        
+
     Returns:
         String value from environment
-        
+
     Raises:
         RuntimeError: If required variable is missing and no default provided
     """
@@ -51,11 +50,11 @@ def env_str(key: str, default: Optional[str] = None) -> str:
 def env_int(key: str, default: int) -> int:
     """
     Get an integer value from environment variables with fallback to default.
-    
+
     Args:
         key: Environment variable name
         default: Default value if not found or invalid
-        
+
     Returns:
         Integer value from environment or default
     """
@@ -68,11 +67,11 @@ def env_int(key: str, default: int) -> int:
 def env_float(key: str, default: float) -> float:
     """
     Get a float value from environment variables with fallback to default.
-    
+
     Args:
         key: Environment variable name
         default: Default value if not found or invalid
-        
+
     Returns:
         Float value from environment or default
     """
@@ -145,7 +144,7 @@ def ensure_dir(path: str) -> str:
         raise
 
 
-def resolve_writable_dir(preferred: Optional[str], purpose: str, subdir: Optional[str] = None) -> str:
+def resolve_writable_dir(preferred: str | None, purpose: str, subdir: str | None = None) -> str:
     """Choose and create a writable directory for a given purpose.
 
     Resolution chain (first that can be created/written wins):
@@ -291,26 +290,26 @@ def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
 def sha256_bytes(data: bytes) -> str:
     """
     Calculate SHA256 hash of byte data.
-    
+
     Args:
         data: Byte data to hash
-        
+
     Returns:
         Hexadecimal string representation of the hash
     """
     return hashlib.sha256(data).hexdigest()
 
 
-def parse_iso8601(ts: str) -> Optional[datetime]:
+def parse_iso8601(ts: str) -> datetime | None:
     """
     Parse ISO8601 timestamp string to datetime object.
-    
+
     Handles both timezone-aware and timezone-naive timestamps,
     converting 'Z' suffix to proper UTC timezone.
-    
+
     Args:
         ts: ISO8601 timestamp string
-        
+
     Returns:
         Parsed datetime object or None if parsing fails
     """
@@ -351,14 +350,14 @@ def resolve_dot_local_url(url: str) -> tuple[str, str | None]:
 def combine_url(base: str, maybe_rel: str) -> str:
     """
     Combine base URL with a potentially relative URL.
-    
+
     If maybe_rel is already absolute (has http/https scheme), returns it as-is.
     Otherwise, joins it with the base URL using proper URL joining rules.
-    
+
     Args:
         base: Base URL
         maybe_rel: Potentially relative URL or path
-        
+
     Returns:
         Complete absolute URL
     """

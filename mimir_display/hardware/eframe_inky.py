@@ -17,8 +17,9 @@ import logging
 import os
 import traceback
 
-from PIL import Image  # type: ignore
 from dotenv import load_dotenv  # type: ignore
+from PIL import Image  # type: ignore
+
 from mimir_display.utils.orientation import orientation_info
 
 logger = logging.getLogger(__name__)

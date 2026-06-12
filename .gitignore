@@ -180,3 +180,4 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 scripts/install_display_test.sh
+/.venv-ci

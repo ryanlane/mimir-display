@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from .content import DisplayManager
 from .content.splash import build_splash, get_local_ip, overlay_status
@@ -31,10 +31,10 @@ class SplashRenderer:
         self.logger = logger
         self._get_capabilities = get_capabilities
 
-        self._splash_path: Optional[str] = None
+        self._splash_path: str | None = None
         self._current_splash_status: str = ""
         self._current_splash_is_error: bool = False
-        self._last_splash_signature: Optional[tuple] = None
+        self._last_splash_signature: tuple | None = None
 
     @property
     def current_status(self) -> str:

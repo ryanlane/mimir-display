@@ -14,7 +14,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .bootstrap_manager import BootstrapManager
 from .config import Config
@@ -84,8 +84,8 @@ class MqttDisplayClientManager:
         self.stop_event = asyncio.Event()
         self.force_update_flag = False
         self.force_refresh_flag = False
-        self._mqtt_config_task: Optional[asyncio.Task] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._mqtt_config_task: asyncio.Task | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         # Load persistent state and apply any saved MQTT override
         self._load_state()
@@ -196,7 +196,7 @@ class MqttDisplayClientManager:
         )
 
     @staticmethod
-    def _split_tags(tag_str: Optional[str]) -> list[str]:
+    def _split_tags(tag_str: str | None) -> list[str]:
         if not tag_str:
             return []
         return [t.strip() for t in tag_str.split(",") if t.strip()]
@@ -206,7 +206,7 @@ class MqttDisplayClientManager:
     # ------------------------------------------------------------------
 
     @property
-    def display_id(self) -> Optional[str]:
+    def display_id(self) -> str | None:
         """Get the current display ID (from config with hostname fallback)."""
         return self.config.display_id
 

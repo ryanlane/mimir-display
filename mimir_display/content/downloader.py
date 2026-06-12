@@ -14,7 +14,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -35,13 +35,13 @@ class ContentDownloader:
 
         If a candidate is not writable it is skipped; the chosen directory is logged at INFO.
     """
-    
+
     def __init__(self, cache_dir: Path = None, timeout: int = 30):
         self.logger = logging.getLogger(__name__)
         self.cache_dir = self._resolve_cache_dir(cache_dir)
         self.timeout = timeout
 
-    def _resolve_cache_dir(self, explicit: Optional[Path]) -> Path:
+    def _resolve_cache_dir(self, explicit: Path | None) -> Path:
         """Resolve a writable cache directory with precedence and fallbacks."""
         # Prefer explicit arg, then MIMIR_CACHE_DIR, then DATA_DIR/cache
         preferred = (
@@ -53,7 +53,7 @@ class ContentDownloader:
         cache_dir = resolve_writable_dir(preferred, "content_cache", subdir=subdir)
         self.logger.info("Using content cache directory: %s", cache_dir)
         return Path(cache_dir)
-    
+
     def _sha256_file(self, file_path: Path) -> str:
         """Calculate SHA256 hash of a file."""
         hasher = hashlib.sha256()
@@ -61,7 +61,7 @@ class ContentDownloader:
             for chunk in iter(lambda: f.read(8192), b""):
                 hasher.update(chunk)
         return hasher.hexdigest()
-    
+
     def _get_cache_path(self, content_id: str, expected_sha: str = None) -> Path:
         """Get cache file path for content."""
         if expected_sha:
@@ -102,9 +102,9 @@ class ContentDownloader:
         if removed:
             self.logger.info("Removed %d stale temp files from cache", removed)
         return removed
-        
+
     # Note: _normalize_delivery implemented later in class (single source of truth)
-    
+
     async def download_with_cache(
         self,
         url: str,
@@ -114,16 +114,16 @@ class ContentDownloader:
     ) -> Path:
         """
         Download content with caching and validation.
-        
+
         Args:
             url: URL to download from
             content_id: Unique identifier for the content
             expected_sha: Expected SHA256 hash for validation
             force_download: Skip cache and force fresh download
-            
+
         Returns:
             Path to the downloaded/cached file
-            
+
         Raises:
             ValueError: If SHA256 validation fails
             aiohttp.ClientError: If download fails
@@ -135,7 +135,7 @@ class ContentDownloader:
             self._cleanup_stale_temps(max_age_seconds=1800)
         except Exception:
             pass
-        
+
         # Check if file exists in cache and is valid
         if not force_download and cache_path.exists():
             if expected_sha:
@@ -148,40 +148,40 @@ class ContentDownloader:
             else:
                 self.logger.debug("Cache hit for %s (no SHA validation)", content_id)
                 return cache_path
-        
+
         # Download the file
         self.logger.info("Downloading %s from %s", content_id, url)
         url, host_header = resolve_dot_local_url(url)
         if host_header:
             self.logger.debug("Pre-resolved .local host %s -> %s", host_header, url)
         start_time = datetime.now()
-        
+
         temp_path = cache_path.with_suffix('.tmp')
-        
+
         try:
             timeout = aiohttp.ClientTimeout(total=self.timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 headers = {"Host": host_header} if host_header else None
                 async with session.get(url, headers=headers) as response:
                     response.raise_for_status()
-                    
+
                     # Stream download to temporary file
                     with open(temp_path, 'wb') as f:
                         async for chunk in response.content.iter_chunked(8192):
                             f.write(chunk)
-            
+
             # Validate SHA256 if provided
             if expected_sha:
                 actual_sha = self._sha256_file(temp_path)
                 if actual_sha != expected_sha:
                     temp_path.unlink()  # Clean up invalid file
                     raise ValueError(f"SHA256 mismatch: expected {expected_sha}, got {actual_sha}")
-                
+
                 self.logger.debug("SHA256 validation passed for %s", content_id)
-            
+
             # Move to final location
             temp_path.rename(cache_path)
-            
+
             duration = (datetime.now() - start_time).total_seconds()
             file_size = cache_path.stat().st_size
             self.logger.info("Downloaded %s: %d bytes in %.2fs", content_id, file_size, duration)
@@ -190,53 +190,53 @@ class ContentDownloader:
                 self._cleanup_stale_temps(max_age_seconds=600)
             except Exception:
                 pass
-            
+
             return cache_path
-            
+
         except Exception as e:
             # Clean up temporary file on error
             if temp_path.exists():
                 temp_path.unlink()
-            
+
             self.logger.error("Download failed for %s: %s", content_id, e)
             raise
-    
+
     def get_cache_info(self) -> dict[str, Any]:
         """Get information about the current cache."""
         if not self.cache_dir.exists():
             return {"total_files": 0, "total_size": 0, "cache_dir": str(self.cache_dir)}
-        
+
         files = list(self.cache_dir.glob("*"))
         total_size = sum(f.stat().st_size for f in files if f.is_file())
-        
+
         return {
             "total_files": len(files),
             "total_size": total_size,
             "total_size_mb": round(total_size / (1024 * 1024), 2),
             "cache_dir": str(self.cache_dir)
         }
-    
+
     def clear_cache(self, keep_recent: int = 0) -> int:
         """
         Clear the content cache.
-        
+
         Args:
             keep_recent: Number of most recent files to keep (0 = clear all)
-            
+
         Returns:
             Number of files removed
         """
         if not self.cache_dir.exists():
             return 0
-        
+
         files = sorted(
             [f for f in self.cache_dir.glob("*") if f.is_file()],
             key=lambda f: f.stat().st_mtime,
             reverse=True
         )
-        
+
         files_to_remove = files[keep_recent:] if keep_recent > 0 else files
-        
+
         removed_count = 0
         for file_path in files_to_remove:
             try:
@@ -244,10 +244,10 @@ class ContentDownloader:
                 removed_count += 1
             except Exception as e:
                 self.logger.warning("Failed to remove cache file %s: %s", file_path, e)
-        
+
         if removed_count > 0:
             self.logger.info("Cleared %d files from content cache", removed_count)
-        
+
         return removed_count
 
     def _normalize_delivery(self, assignment: dict[str, Any]) -> dict[str, Any]:
@@ -274,19 +274,19 @@ class ContentDownloader:
 
 class AssignmentProcessor:
     """Processes MQTT assignment commands and manages content workflow."""
-    
+
     def __init__(self, downloader: ContentDownloader, display_callback=None):
         self.downloader = downloader
         self.display_callback = display_callback  # Function to call with processed content
         self.logger = logging.getLogger(__name__)
-    
+
     async def process_assignment(self, assignment: dict[str, Any]) -> dict[str, Any]:
         """
         Process an assignment command and return result info.
-        
+
         Args:
             assignment: MQTT assignment command payload
-            
+
         Returns:
             Dict with processing results and metadata
         """
@@ -294,9 +294,9 @@ class AssignmentProcessor:
         asset = assignment.get("asset") or {}
         display_config = assignment.get("display", {})
         sequence = assignment.get("sequence")
-        
+
         self.logger.info("Processing assignment %s", assignment_id)
-        
+
         try:
             # Backward compatibility / normalization: allow alternate shapes
             if not asset or "url" not in asset:
@@ -323,7 +323,7 @@ class AssignmentProcessor:
                 content_id=asset["id"],
                 expected_sha=asset.get("sha256")
             )
-            
+
             # Process display configuration
             result = {
                 "assignment_id": assignment_id,
@@ -334,7 +334,7 @@ class AssignmentProcessor:
                 "processed_at": datetime.now(timezone.utc).isoformat(),
                 "success": True
             }
-            
+
             # Call display callback if provided
             if self.display_callback:
                 try:
@@ -343,7 +343,7 @@ class AssignmentProcessor:
                 except Exception as e:
                     self.logger.error("Display callback failed for %s: %s", assignment_id, e)
                     result["display_error"] = str(e)
-            
+
             # Enforce small cache footprint: keep only last/current/next (3 most recent)
             try:
                 self.downloader.clear_cache(keep_recent=3)
@@ -352,7 +352,7 @@ class AssignmentProcessor:
 
             self.logger.info("Assignment %s processed successfully", assignment_id)
             return result
-            
+
         except Exception as e:
             self.logger.error("Assignment %s processing failed: %s", assignment_id, e)
             return {
@@ -363,7 +363,7 @@ class AssignmentProcessor:
                 "error_type": type(e).__name__,
                 "processed_at": datetime.now(timezone.utc).isoformat()
             }
-    
+
     async def _call_display_callback(self, content_path: Path, display_config: dict[str, Any]):
         """Call the display callback function."""
         if asyncio.iscoroutinefunction(self.display_callback):

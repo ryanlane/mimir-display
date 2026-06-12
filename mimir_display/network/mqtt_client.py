@@ -11,4 +11,3 @@ Topic Hierarchy:
 - mimir/<id>/cmd        - Service → device commands (assign, refresh)
 - mimir/registry/register - Device registration requests
 """
-from .mqtt.client import MqttDisplayClient

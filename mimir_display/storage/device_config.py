@@ -23,8 +23,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
-
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +99,7 @@ def _resolve_path() -> Path:
 class DeviceConfig:
     """Load / save server-assigned device configuration."""
 
-    def __init__(self, path: Optional[Path] = None) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self._path = path or _resolve_path()
         self._data: dict[str, Any] = {}
         self._load()
@@ -196,40 +195,40 @@ class DeviceConfig:
         return self._data.get(key, default)
 
     @property
-    def platform_url(self) -> Optional[str]:
+    def platform_url(self) -> str | None:
         return self._data.get("platform_url")
 
     @property
-    def display_name(self) -> Optional[str]:
+    def display_name(self) -> str | None:
         return self._data.get("display_name")
 
     @property
-    def display_location(self) -> Optional[str]:
+    def display_location(self) -> str | None:
         return self._data.get("display_location")
 
     @property
-    def display_orientation(self) -> Optional[str]:
+    def display_orientation(self) -> str | None:
         return self._data.get("display_orientation")
 
     @property
-    def mqtt_host(self) -> Optional[str]:
+    def mqtt_host(self) -> str | None:
         return self._data.get("mqtt_host")
 
     @property
-    def mqtt_port(self) -> Optional[int]:
+    def mqtt_port(self) -> int | None:
         v = self._data.get("mqtt_port")
         return int(v) if v is not None else None
 
     @property
-    def mqtt_username(self) -> Optional[str]:
+    def mqtt_username(self) -> str | None:
         return self._data.get("mqtt_username")
 
     @property
-    def mqtt_password(self) -> Optional[str]:
+    def mqtt_password(self) -> str | None:
         return self._data.get("mqtt_password")
 
     @property
-    def reg_token(self) -> Optional[str]:
+    def reg_token(self) -> str | None:
         return self._data.get("reg_token")
 
     @property

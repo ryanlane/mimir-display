@@ -16,7 +16,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +23,7 @@ _SCRIPT_NAMES = ("pull_and_update.sh", "update_display.sh")
 _FALLBACK_DIRS = ("/opt/mimir-display/scripts",)
 
 
-def find_update_script() -> Optional[str]:
+def find_update_script() -> str | None:
     """Return the path to the best available update script, or None."""
 
     # 1. Explicit env var pointing at the repo / install dir
@@ -61,8 +60,8 @@ def find_update_script() -> Optional[str]:
 def trigger_update(
     git_branch: str = "main",
     dry_run: bool = False,
-    log: Optional[logging.Logger] = None,
-) -> Optional[int]:
+    log: logging.Logger | None = None,
+) -> int | None:
     """
     Launch the update script in a detached subprocess.
 

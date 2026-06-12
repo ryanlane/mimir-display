@@ -22,6 +22,7 @@ except ImportError:
 
 from mimir_display.content.downloader import AssignmentProcessor
 from mimir_display.utils.helpers import resolve_dot_local_url
+
 from .topics import MqttTopicManager
 
 if TYPE_CHECKING:

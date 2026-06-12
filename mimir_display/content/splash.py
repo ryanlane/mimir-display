@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import secrets
 import socket
-from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -63,9 +62,9 @@ def build_splash(
     pair_code: str,
     platform_url: str | None,
     ip_address: str,
-    logo_path: Optional[str] = None,
+    logo_path: str | None = None,
     status_text: str = "",
-    qr_url: Optional[str] = None,
+    qr_url: str | None = None,
 ) -> Image.Image:
     """
     Compose and return a startup splash PIL Image.
@@ -162,11 +161,11 @@ def _draw_status_text(
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _load_logo(
-    logo_path: Optional[str],
+    logo_path: str | None,
     W: int, H: int,
     is_portrait: bool, is_square: bool,
     pad: int,
-) -> Optional[Image.Image]:
+) -> Image.Image | None:
     if not logo_path or not os.path.exists(logo_path):
         return None
     try:
@@ -344,7 +343,7 @@ def _layout_landscape(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
     W: int, H: int, pad: int,
-    logo_img: Optional[Image.Image],
+    logo_img: Image.Image | None,
     qr_img: Image.Image,
     code: str, ip: str,
     code_font: ImageFont.ImageFont,
@@ -402,7 +401,7 @@ def _layout_portrait(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
     W: int, _H: int, pad: int,
-    logo_img: Optional[Image.Image],
+    logo_img: Image.Image | None,
     qr_img: Image.Image,
     code: str, ip: str,
     code_font: ImageFont.ImageFont,
@@ -441,7 +440,7 @@ def overlay_status(
     splash_path: str,
     status_text: str,
     is_error: bool = False,
-) -> Optional[Image.Image]:
+) -> Image.Image | None:
     """
     Update the reserved status bar at the bottom of an existing splash image.
 
@@ -478,7 +477,7 @@ def _layout_square(
     canvas: Image.Image,
     draw: ImageDraw.ImageDraw,
     W: int, H: int, pad: int,
-    logo_img: Optional[Image.Image],
+    logo_img: Image.Image | None,
     qr_img: Image.Image,
     code: str, ip: str,
     code_font: ImageFont.ImageFont,

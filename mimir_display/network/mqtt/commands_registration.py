@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, Any
 from .topics import MqttTopicManager
 
 if TYPE_CHECKING:
-    from .events import MqttEventPublisher
     from aiomqtt import Client
+
+    from .events import MqttEventPublisher
 
 
 class RegistrationCommandHandler:

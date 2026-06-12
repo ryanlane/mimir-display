@@ -10,34 +10,35 @@ from __future__ import annotations
 
 import os
 import socket
-from typing import Any, Optional
-from .utils.helpers import env_str, env_int, env_float
+from typing import Any
+
+from .utils.helpers import env_int, env_str
 
 
 class Config:
     """
     Configuration manager for the display client.
-    
+
     Handles loading configuration from multiple sources:
     1. Environment variables (highest priority)
     2. Command-line arguments (during registration)
     3. Default values (lowest priority)
     """
-    
+
     def __init__(self, args=None):
         """
         Initialize configuration from environment and CLI args.
-        
+
         Args:
             args: Command-line arguments namespace (optional)
         """
         self.args = args
         self._config = self._load_base_config()
-        
+
         # Apply CLI overrides if provided
         if args:
             self._apply_cli_overrides()
-    
+
     def _load_base_config(self) -> dict[str, Any]:
         """Load base configuration from environment variables."""
         return {
@@ -56,13 +57,13 @@ class Config:
             "default_content_path": os.getenv("DEFAULT_CONTENT_PATH", ""),
             "assignment_ttl_seconds": env_int("ASSIGNMENT_TTL_SECONDS", 300),
             "auth_token": os.getenv("AUTH_TOKEN", ""),
-            
+
             # Network configuration
             "webhook_port": env_int("WEBHOOK_PORT", 8081),
             "webhook_enabled": env_str("WEBHOOK_ENABLED", "true").lower() == "true",
             "provisioning_port": env_int("PROVISIONING_PORT", 7777),
             "provisioning_enabled": env_str("PROVISIONING_ENABLED", "true").lower() == "true",
-            
+
             # MQTT configuration
             "mqtt_broker_host": os.getenv("MQTT_BROKER_HOST", "").strip(),
             "mqtt_broker_port": env_int("MQTT_BROKER_PORT", 1883),
@@ -73,23 +74,23 @@ class Config:
             "mqtt_config_poll_seconds": env_int("MQTT_CONFIG_POLL_SECONDS", 60),
             "mqtt_config_url": os.getenv("MQTT_CONFIG_URL", ""),
             "mqtt_config_endpoint": os.getenv("MQTT_CONFIG_ENDPOINT", "/api/displays/mqtt/config"),
-            
+
             # Operational modes
             "discovery_mode": env_str("DISCOVERY_MODE", "false").lower() == "true",
             "use_redis_distribution": env_str("USE_REDIS_DISTRIBUTION", "true").lower() == "true",
-            
+
             # Logging
             "log_level": os.getenv("LOG_LEVEL", "INFO"),
             "data_dir": os.getenv("DATA_DIR", ""),  # Will be set by client if empty
         }
-    
+
     def _apply_cli_overrides(self):
         """Apply command-line argument overrides."""
         override_fields = [
             "platform_url", "display_id", "display_name", "display_location", "display_orientation",
             "hostname", "tags", "client_version", "default_content_path"
         ]
-        
+
         for field in override_fields:
             value = getattr(self.args, field, None)
             if value is not None:
@@ -98,80 +99,80 @@ class Config:
                     self._config[field] = [t.strip() for t in value.split(",") if t.strip()]
                 else:
                     self._config[field] = value
-    
+
     def get(self, key: str, default=None):
         """Get configuration value by key."""
         return self._config.get(key, default)
-    
+
     def set(self, key: str, value: Any):
         """Set configuration value."""
         self._config[key] = value
-    
+
     def update(self, updates: dict[str, Any]):
         """Update multiple configuration values."""
         self._config.update(updates)
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Return configuration as dictionary."""
         return self._config.copy()
-    
+
     @property
     def platform_url(self) -> str:
         return self._config["platform_url"]
-    
+
     @property
     def display_name(self) -> str:
         return self._config["display_name"]
-    
+
     @property
     def display_location(self) -> str:
         return self._config["display_location"]
-    
+
     @property
     def hostname(self) -> str:
         return self._config["hostname"]
-    
+
     @property
     def tags(self) -> list[str]:
         return self._config["tags"]
-    
+
     @property
     def webhook_enabled(self) -> bool:
         return self._config["webhook_enabled"]
-    
+
     @property
     def webhook_port(self) -> int:
         return self._config["webhook_port"]
-    
+
     @property
     def discovery_mode(self) -> bool:
         return self._config["discovery_mode"]
-    
+
     @property
     def use_redis_distribution(self) -> bool:
         return self._config["use_redis_distribution"]
-    
-   
+
+
     @property
     def mqtt_broker_host(self) -> str:
         return self._config["mqtt_broker_host"]
-    
+
     @property
     def mqtt_broker_port(self) -> int:
         return self._config["mqtt_broker_port"]
-    
+
     @property
-    def mqtt_username(self) -> Optional[str]:
+    def mqtt_username(self) -> str | None:
         return self._config["mqtt_username"]
-    
+
     @property
-    def mqtt_password(self) -> Optional[str]:
+    def mqtt_password(self) -> str | None:
         return self._config["mqtt_password"]
-    
+
     @property
     def mqtt_heartbeat_interval(self) -> int:
         return self._config["mqtt_heartbeat_interval"]
-    
+
     @property
     def display_id(self) -> str:
         """Get effective display ID - use configured value or fall back to hostname."""

@@ -9,10 +9,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+
 from PIL import Image, ImageOps  # type: ignore
 
 # Unified hardware abstraction (selects correct backend automatically)
-from mimir_display.hardware import HARDWARE_AVAILABLE, display_image as hw_display_image
+from mimir_display.hardware import HARDWARE_AVAILABLE
+from mimir_display.hardware import display_image as hw_display_image
 
 
 class DisplayManager:
@@ -20,7 +22,7 @@ class DisplayManager:
     Minimal display manager that loads an image from disk, fits it to the
     device resolution/orientation, and pushes it to the hardware backend.
     """
-    
+
     def __init__(self, capabilities: dict[str, Any], cache_dir: str, logger):
         self.capabilities = capabilities or {}
         self.cache_dir = cache_dir
@@ -96,42 +98,42 @@ class DisplayManager:
         self._enforce_cache_retention(keep=3)
         # Best-effort global tmp PNG cleanup (protects against library tmp in /tmp)
         self._cleanup_system_tmp_pngs()
-    
+
     def resize_for_display(self, img: Image.Image) -> Image.Image:
         """
         Resize image to fit display resolution.
-        
+
         Args:
             img: Source image
-            
+
         Returns:
             Resized image that fits display
         """
         w, h = self._target_resolution()
-        
+
         if img.size == (w, h):
             return img
-        
+
         # Convert to RGB and letterbox to maintain aspect ratio
         img = img.convert("RGB")
         img = img.copy()
         img.thumbnail((w, h), Image.Resampling.LANCZOS)
-        
+
         # Create canvas and center the image
         canvas = Image.new("RGB", (w, h), (255, 255, 255))
         x = (w - img.width) // 2
         y = (h - img.height) // 2
         canvas.paste(img, (x, y))
-        
+
         return canvas
-    
+
     def process_image_data(self, data: bytes) -> str:
         """
         Process image data and prepare for display.
-        
+
         Args:
             data: Raw image data
-            
+
         Returns:
             Path to processed image file ready for display
         """
@@ -139,21 +141,21 @@ class DisplayManager:
         temp_path = os.path.join(self.cache_dir, "tmp_display.png")
         with open(temp_path, "wb") as f:
             f.write(data)
-        
+
         try:
             # Load, resize, and save processed image
             img = Image.open(temp_path)
             img = self.resize_for_display(img)
             img.save(temp_path)
-            
+
             self.logger.debug("Processed image: %dx%d -> %dx%d",
                               img.size[0], img.size[1], *self._target_resolution())
             return temp_path
-            
+
         except Exception as e:
             self.logger.error("Failed to process image: %s", e)
             raise
-    
+
     def display_image(self, image_path: str):
         """Display image on hardware via unified backend abstraction.
 
@@ -170,11 +172,11 @@ class DisplayManager:
         except Exception as e:  # noqa: BLE001
             self.logger.error("Failed to display image: %s", e)
             raise
-    
+
     def display_from_data(self, data: bytes):
         """
         Process and display image data.
-        
+
         Args:
             data: Raw image data to process and display
         """
@@ -193,18 +195,18 @@ class DisplayManager:
             # Enforce retention after each update
             self._enforce_cache_retention(keep=3)
             self._cleanup_system_tmp_pngs()
-    
+
     def display_default_content(self, default_path: str):
         """
         Display default content if available.
-        
+
         Args:
             default_path: Path to default content image
         """
         if not default_path or not os.path.exists(default_path):
             self.logger.info("No default content to display")
             return
-        
+
         temp_path = None
         try:
             self.logger.info("Displaying default content: %s", default_path)
@@ -245,7 +247,7 @@ class DisplayManager:
     @property
     def resolution(self) -> tuple[int, int]:  # pragma: no cover - simple passthrough
         return self._target_resolution()
-    
+
     def _fit_image(self, img: Image.Image, target_w: int, target_h: int) -> Image.Image:
         """
         Letterbox fit: preserve aspect ratio, pad with white.
@@ -278,7 +280,7 @@ class DisplayManager:
         off_y = (target_h - new_h) // 2
         canvas.paste(img_resized, (off_x, off_y))
         return canvas
-    
+
     def _hw_display_image(self, img: Image.Image) -> None:
         """Persist image to a temp PNG and hand off to unified backend.
 

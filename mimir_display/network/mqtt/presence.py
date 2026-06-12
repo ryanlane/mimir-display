@@ -6,7 +6,7 @@ import logging
 import socket
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from aiomqtt import Client
 
@@ -20,13 +20,13 @@ class MqttPresenceManager:
         self,
         topics: MqttTopicManager,
         heartbeat_interval: int = 30,
-        activity_callback: Optional[Callable[[str], None]] = None,
+        activity_callback: Callable[[str], None] | None = None,
     ):
         self.topics = topics
         self.heartbeat_interval = heartbeat_interval
         self.logger = logging.getLogger(__name__)
-        self._heartbeat_task: Optional[asyncio.Task] = None
-        self._client: Optional[Client] = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._client: Client | None = None
         self._extra_fields: dict[str, Any] = {}
         self._activity_callback = activity_callback
 

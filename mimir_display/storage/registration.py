@@ -22,9 +22,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from datetime import datetime, timezone
 
 from mimir_display.utils.helpers import resolve_writable_dir
 
@@ -116,12 +116,12 @@ class RegistrationState:
             if (directory / "device_config.json").exists():
                 return directory
         return None
-    
+
     def _load_state(self) -> None:
         """Load registration state from disk."""
         if self.state_file.exists():
             try:
-                with open(self.state_file, 'r') as f:
+                with open(self.state_file) as f:
                     self._state = json.load(f)
                 self.logger.debug("Loaded registration state from %s", self.state_file)
             except Exception as e:
@@ -130,7 +130,7 @@ class RegistrationState:
         else:
             self.logger.debug("No existing registration state found")
             self._state = {}
-    
+
     def _save_state(self) -> None:
         """Save registration state to disk."""
         try:
@@ -140,32 +140,32 @@ class RegistrationState:
             self.logger.debug("Saved registration state to %s", self.state_file)
         except Exception as e:
             self.logger.error("Failed to save registration state: %s", e)
-    
+
     @property
     def is_registered(self) -> bool:
         """Check if device is currently registered."""
         return bool(self._state.get('assigned_id') and self._state.get('registration_timestamp'))
-    
+
     @property
     def assigned_id(self) -> str | None:
         """Get the assigned device ID from service."""
         return self._state.get('assigned_id')
-    
+
     @property
     def device_id(self) -> str | None:
         """Get the original device ID used for registration."""
         return self._state.get('device_id')
-    
+
     @property
     def registration_timestamp(self) -> str | None:
         """Get the registration timestamp."""
         return self._state.get('registration_timestamp')
-    
+
     @property
     def service_config(self) -> dict[str, Any]:
         """Get service-provided configuration."""
         return self._state.get('service_config', {})
-    
+
     def update_registration(
         self,
         device_id: str,
@@ -182,14 +182,14 @@ class RegistrationState:
         })
         self._save_state()
         self.logger.info("Updated registration: %s -> %s", device_id, assigned_id)
-    
+
     def clear_registration(self) -> None:
         """Clear registration state (device needs to re-register)."""
         old_assigned_id = self._state.get('assigned_id')
         self._state = {}
         self._save_state()
         self.logger.info("Cleared registration state for %s", old_assigned_id)
-    
+
     def update_heartbeat_config(self, heartbeat_interval: int) -> None:
         """Update heartbeat configuration from service."""
         if 'service_config' not in self._state:
@@ -197,7 +197,7 @@ class RegistrationState:
         self._state['service_config']['heartbeat_interval'] = heartbeat_interval
         self._state['last_updated'] = datetime.now(timezone.utc).isoformat()
         self._save_state()
-    
+
     def get_state_summary(self) -> dict[str, Any]:
         """Get a summary of current registration state."""
         return {
@@ -207,12 +207,12 @@ class RegistrationState:
             'registration_age_hours': self._get_registration_age_hours(),
             'service_config': self.service_config
         }
-    
+
     def _get_registration_age_hours(self) -> float | None:
         """Get the age of registration in hours."""
         if not self.registration_timestamp:
             return None
-        
+
         try:
             reg_time = datetime.fromisoformat(self.registration_timestamp.replace('Z', '+00:00'))
             now = datetime.now(timezone.utc)

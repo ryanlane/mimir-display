@@ -1,10 +1,14 @@
 # mimir_display/network/mqtt/__init__.py
-from .topics import MqttTopicManager
+from .client import MqttDisplayClient
+from .commands import (
+    DisplayCommandHandler,
+    MqttCommandHandler,
+    RegistrationCommandHandler,
+)
+from .events import MqttEventPublisher
 from .presence import MqttPresenceManager
 from .registration import MqttRegistrationManager
-from .events import MqttEventPublisher
-from .commands import MqttCommandHandler, RegistrationCommandHandler, DisplayCommandHandler
-from .client import MqttDisplayClient
+from .topics import MqttTopicManager
 
 __all__ = [
     "MqttTopicManager",

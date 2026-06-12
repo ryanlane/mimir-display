@@ -11,19 +11,19 @@ import socket
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from aiomqtt import Client
 
-from .topics import MqttTopicManager
-from .registration import MqttRegistrationManager
-from .presence import MqttPresenceManager
-from .events import MqttEventPublisher
-from .commands import MqttCommandHandler
-
 from mimir_display.config import Config
-from mimir_display.content.downloader import ContentDownloader, AssignmentProcessor
+from mimir_display.content.downloader import AssignmentProcessor, ContentDownloader
 from mimir_display.ota import OtaUpdateManager
+
+from .commands import MqttCommandHandler
+from .events import MqttEventPublisher
+from .presence import MqttPresenceManager
+from .registration import MqttRegistrationManager
+from .topics import MqttTopicManager
 
 
 class MqttDisplayClient:
@@ -63,8 +63,8 @@ class MqttDisplayClient:
             config.get('platform_url'),
         )
 
-        self._assigned_scene_id: Optional[str] = None
-        self._assigned_subchannel_id: Optional[str] = None
+        self._assigned_scene_id: str | None = None
+        self._assigned_subchannel_id: str | None = None
         self._state_path = self._derive_state_path()
         self._assignment_meta: dict[str, Any] = {}
         self._load_local_state()
@@ -80,12 +80,12 @@ class MqttDisplayClient:
         self.commands.set_scene_callbacks(self.set_scene_id, self.clear_scene_id)
         self.commands.set_registration_manager(self.registration)
 
-        self._pair_code: Optional[str] = None
-        self._on_first_connect: Optional[Callable[[], None]] = None
+        self._pair_code: str | None = None
+        self._on_first_connect: Callable[[], None] | None = None
         self._first_connect_fired = False
-        self._on_pair_status: Optional[Callable[[str, dict[str, Any]], None]] = None
+        self._on_pair_status: Callable[[str, dict[str, Any]], None] | None = None
 
-        self._client: Optional[Client] = None
+        self._client: Client | None = None
         self._running = False
         self._shutdown = False
 
@@ -286,9 +286,9 @@ class MqttDisplayClient:
     async def set_scene_id(
         self,
         scene_id: str,
-        subchannel_id: Optional[str] = None,
+        subchannel_id: str | None = None,
         *,
-        assignment_id: Optional[str] = None,
+        assignment_id: str | None = None,
         source: str = "command",
     ):
         """Set (or update) the current scene assignment and republish status.
@@ -335,7 +335,7 @@ class MqttDisplayClient:
                 "Assignment unchanged; scene_id=%s subchannel_id=%s", scene_id, subchannel_id
             )
 
-    async def clear_scene_id(self, *, assignment_id: Optional[str] = None, reason: str = "clear_command"):
+    async def clear_scene_id(self, *, assignment_id: str | None = None, reason: str = "clear_command"):
         """Clear current scene assignment and republish status.
 
         Persists a cleared state with metadata for audit.
@@ -368,10 +368,10 @@ class MqttDisplayClient:
             reason,
         )
 
-    def get_scene_id(self) -> Optional[str]:
+    def get_scene_id(self) -> str | None:
         return self._assigned_scene_id
 
-    def get_subchannel_id(self) -> Optional[str]:
+    def get_subchannel_id(self) -> str | None:
         return getattr(self, "_assigned_subchannel_id", None)
 
     @asynccontextmanager
@@ -403,52 +403,52 @@ class MqttDisplayClient:
                 self.events.set_client(None)
 
         self.logger.info("MQTT connection closed")
-    
-    async def register(self) -> Optional[dict[str, Any]]:
+
+    async def register(self) -> dict[str, Any] | None:
         """Register device with the service, updating state and topics as needed."""
         async with self.connection() as client:
             response = await self.registration.register_device(client)
-            
+
             if response:
                 # Update our device ID and topics if registration assigned a new ID
                 new_device_id = self.registration.get_effective_device_id()
                 if new_device_id != self.device_id:
                     self.device_id = new_device_id
                     self.topics = MqttTopicManager(self.device_id)
-                    
+
                     # Update all components with new topics
                     self.events.topics = self.topics
                     self.commands.topics = self.topics
-                    
+
                     # Restart presence with updated topics
                     await self.presence.stop_presence()
                     self.presence = self._build_presence_manager(self.topics)
                     self._apply_presence_fields()
                     self.commands.set_presence_manager(self.presence)
                     await self.presence.start_presence(client)
-                    
+
                     self.logger.info("Registration complete - now using device ID: %s", self.device_id)
-                
+
             return response
-    
+
     def is_registered(self) -> bool:
         """Check if device is currently registered."""
         return self.registration.is_registered()
-    
+
     def get_registration_summary(self) -> dict[str, Any]:
         """Get registration status summary."""
         return self.registration.get_registration_summary()
-    
+
     def clear_registration(self):
         """Clear registration state (force re-registration)."""
         old_id = self.device_id
         self.registration.clear_registration()
-        
+
         # Reset to auto-generated device ID
         hostname = socket.gethostname()
         self.device_id = create_device_id(hostname)
         self.topics = MqttTopicManager(self.device_id)
-        
+
         # Update all components
         self.events.topics = self.topics
         self.commands.topics = self.topics
@@ -456,20 +456,20 @@ class MqttDisplayClient:
         self._apply_presence_fields()
         self.commands.set_presence_manager(self.presence)
         self.logger.info("Registration cleared: %s -> %s", old_id, self.device_id)
-    
+
     def set_display_callback(self, callback: Callable):
         """Set or update the display callback function."""
         self.assignment_processor.display_callback = callback
         self.logger.info("Display callback updated")
-    
+
     def get_cache_info(self) -> dict[str, Any]:
         """Get information about the content cache."""
         return self.downloader.get_cache_info()
-    
+
     def clear_cache(self, keep_recent: int = 0) -> int:
         """Clear the content cache."""
         return self.downloader.clear_cache(keep_recent)
-    
+
     def register_command_handler(self, command_type: str, handler: Callable):
         """Register a handler for MQTT commands."""
         self.commands.register_handler(command_type, handler)
@@ -497,7 +497,7 @@ class MqttDisplayClient:
             await client.disconnect()
         except Exception as e:  # noqa: BLE001
             self.logger.debug("MQTT disconnect failed: %s", e)
-    
+
     async def run_discovery_listener(self):
         """Run the discovery command listener with automatic reconnect/backoff.
 
@@ -516,7 +516,7 @@ class MqttDisplayClient:
         cfg = self._resilience
 
         while not self._shutdown:
-            reason: Optional[str] = None
+            reason: str | None = None
             # (removed disconnect_code variable – unused)
             try:
                 async with self.connection() as client:
@@ -704,7 +704,7 @@ class MqttDisplayClient:
         """Run the command listener loop."""
         async with self.connection() as client:
             await self.commands.start_listening(client)
-    
+
     async def publish_event(self, event_type: str, **kwargs):
         """Convenience method to publish events."""
         if event_type == "ack":

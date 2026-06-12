@@ -22,9 +22,11 @@ The common DRM little-endian XRGB8888 layout appears in memory as B G R X.
 """
 from __future__ import annotations
 
-import os
 import mmap
+import os
+
 from PIL import Image  # type: ignore
+
 from mimir_display.utils.orientation import orientation_info
 
 FB_PATH = os.environ.get("FRAMEBUFFER", "/dev/fb0")
@@ -71,7 +73,7 @@ _LOGGED_ONCE = False
 
 def _read_sysfs_value(path: str) -> str | None:
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return f.read().strip()
     except Exception:
         return None
@@ -129,7 +131,7 @@ def _get_stride(width: int | None = None, bpp_bytes: int | None = None) -> int:
     stride_path = os.path.join(SYSFS_BASE, "stride")
     val = None
     try:
-        with open(stride_path, "r", encoding="utf-8") as f:
+        with open(stride_path, encoding="utf-8") as f:
             raw = f.read().strip()
             if raw.isdigit():
                 val = int(raw)

@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable
 
 import aiohttp
 
 from .network import discover_mimir_server
-from .content.splash import get_local_ip
 
 
 class BootstrapManager:
@@ -47,7 +46,7 @@ class BootstrapManager:
         self._on_apply_orientation = on_apply_orientation
         self._get_capabilities = get_capabilities
         self._get_metadata = get_metadata
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store the running event loop for thread-safe scheduling."""
@@ -153,7 +152,7 @@ class BootstrapManager:
             endpoint = f"/{endpoint}"
         return f"{base}{endpoint}"
 
-    async def _fetch_mqtt_config(self) -> Optional[dict[str, Any]]:
+    async def _fetch_mqtt_config(self) -> dict[str, Any] | None:
         if not self.config.get("mqtt_config_enabled", True):
             return None
         url = self._build_mqtt_config_url()

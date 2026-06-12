@@ -6,14 +6,16 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable
 
 from mimir_display.content.downloader import AssignmentProcessor
-from .topics import MqttTopicManager
-from .commands_registration import RegistrationCommandHandler
+
 from .commands_display import DisplayCommandHandler
+from .commands_registration import RegistrationCommandHandler
+from .topics import MqttTopicManager
 
 if TYPE_CHECKING:
+    from aiomqtt import Client
+
     from .events import MqttEventPublisher
     from .presence import MqttPresenceManager
-    from aiomqtt import Client
 
 __all__ = ["MqttCommandHandler", "RegistrationCommandHandler", "DisplayCommandHandler"]
 

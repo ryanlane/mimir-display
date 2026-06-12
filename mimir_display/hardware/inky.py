@@ -8,11 +8,13 @@ abstracting away the low-level details and providing easy-to-use
 functions for display operations.
 """
 
+from __future__ import annotations
+
+import logging
 import os
 import sys
 import traceback
-import logging
-from __future__ import annotations
+
 from mimir_display.utils.orientation import orientation_info
 
 # Add current directory to path for eframe_inky import
@@ -23,7 +25,11 @@ if HERE not in sys.path:
 logger = logging.getLogger(__name__)
 
 try:
-    from mimir_display.hardware.eframe_inky import get_inky_resolution, show_on_inky, is_dev_mode  # type: ignore
+    from mimir_display.hardware.eframe_inky import (  # type: ignore
+        get_inky_resolution,
+        is_dev_mode,
+        show_on_inky,
+    )
     HARDWARE_AVAILABLE = True
 except ImportError as e:
     HARDWARE_AVAILABLE = False
@@ -65,7 +71,7 @@ except ImportError as e:
 def get_display_resolution() -> tuple[int, int]:
     """
     Get the resolution of the connected Inky display.
-    
+
     Returns:
         Tuple of (width, height) in pixels
     """
@@ -75,23 +81,23 @@ def get_display_resolution() -> tuple[int, int]:
 def display_image(image_path: str):
     """
     Display an image on the Inky display.
-    
+
     Args:
         image_path: Path to the image file to display
-        
+
     Raises:
         Exception: If display operation fails
     """
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Image file not found: {image_path}")
-    
+
     show_on_inky(image_path)
 
 
 def is_development_mode() -> bool:
     """
     Check if running in development mode.
-    
+
     Returns:
         True if in development mode
     """

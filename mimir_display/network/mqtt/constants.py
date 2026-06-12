@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class CommandType(str, Enum):
     ASSIGN = "assign"
     REFRESH = "refresh"

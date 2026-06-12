@@ -90,9 +90,9 @@ class OtaUpdateManager:
             and _norm(status.get("target_version")) == _norm(target)
         ):
             try:
-                failed_at = float(status.get("monotonic_hint", 0)) or 0
+                float(status.get("monotonic_hint", 0)) or 0
             except (TypeError, ValueError):
-                failed_at = 0
+                pass
             # status.json carries wall-clock ts; use file mtime as retry clock
             try:
                 age = time.time() - (self.ota_dir / "status.json").stat().st_mtime

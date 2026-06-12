@@ -3,9 +3,11 @@
 Run on device (inside venv) to inspect persisted scene assignment.
 """
 from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
+
 
 def find_state_file() -> Path | None:
     # Common locations tried by client logic
@@ -28,7 +30,7 @@ def main() -> int:
         print("No device_state.json found in expected locations.")
         return 1
     try:
-        with open(state_file, "r", encoding="utf-8") as f:
+        with open(state_file, encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         print(f"Failed to load {state_file}: {e}")

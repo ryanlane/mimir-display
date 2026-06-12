@@ -14,7 +14,7 @@ import json
 import logging
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Optional
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +142,8 @@ def encode_bundle(
     platform_url: str,
     mqtt_host: str,
     mqtt_port: int = 1883,
-    mqtt_username: Optional[str] = None,
-    mqtt_password: Optional[str] = None,
+    mqtt_username: str | None = None,
+    mqtt_password: str | None = None,
 ) -> str:
     """Encode connection details into a base64 provision bundle string."""
     payload = {

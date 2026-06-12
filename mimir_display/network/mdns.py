@@ -9,10 +9,11 @@ This module handles:
 
 # mimir_display/network/mdns.py
 import asyncio
-import socket
 import ipaddress
+import socket
 from datetime import datetime, timezone
 from typing import Optional
+
 from zeroconf import ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
@@ -22,7 +23,8 @@ MIMIR_SERVER_SERVICE_TYPE = "_mimir._tcp.local."
 def _sync_discover_mimir_server(timeout: float) -> Optional[str]:
     """Blocking scan for _mimir._tcp.local. — run this in a thread."""
     import threading
-    from zeroconf import Zeroconf, ServiceBrowser, ServiceListener
+
+    from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
 
     result: list[Optional[str]] = [None]
     found = threading.Event()
