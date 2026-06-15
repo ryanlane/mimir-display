@@ -303,9 +303,10 @@ log "Arch:   ${ARCH}"
 ### -----------------------------
 ### Prefer PiWheels (wheels for ARM)
 ### -----------------------------
-# Make PiWheels the primary index, keep PyPI as fallback for anything not on PiWheels.
-export PIP_INDEX_URL="${PIP_INDEX_URL:-https://www.piwheels.org/simple}"
-export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://pypi.org/simple}"
+# PyPI as primary (for setuptools/pip/wheel and anything PiWheels doesn't serve),
+# PiWheels as extra so ARM-compiled wheels (Pillow, numpy, etc.) are preferred on Pi.
+export PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.org/simple}"
+export PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL:-https://www.piwheels.org/simple}"
 
 log "Using PIP_INDEX_URL=${PIP_INDEX_URL}"
 log "Using PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}"

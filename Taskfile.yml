@@ -223,6 +223,20 @@ tasks:
           echo "    /lib/systemd/system/mimir-display.service"
         ENDSSH
 
+  reinstall:clean:
+    desc: "Purge then redeploy to a display (usage: task reinstall:clean -- user@host)"
+    summary: |
+      Performs a full clean reinstall sequence on the target:
+        1) task purge -- user@host
+        2) task deploy -- user@host
+    prompt: "This will purge and then redeploy mimir-display on the target. Continue?"
+    cmds:
+      - |
+        TARGET={{.CLI_ARGS}}
+        if [ -z "$TARGET" ]; then echo "Usage: task reinstall:clean -- user@host"; exit 1; fi
+        task purge -- "$TARGET"
+        task deploy -- "$TARGET"
+
   # ============================================================================
   # CLEAN
   # ============================================================================
