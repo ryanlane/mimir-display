@@ -87,10 +87,15 @@ tasks:
       - |
         TARGET={{.CLI_ARGS}}
         if [ -z "$TARGET" ]; then echo "Usage: task deploy -- user@host"; exit 1; fi
+        STAGE_DIR="/tmp/mimir-display-deploy-${USER}"
         echo "Deploying to $TARGET..."
-        rsync -az --exclude .venv --exclude __pycache__ --exclude .git --exclude .env \
-          ./ ${TARGET}:/opt/mimir-display/
-        ssh ${TARGET} "cd /opt/mimir-display && sudo bash scripts/update_display.sh"
+        ssh ${TARGET} "mkdir -p ${STAGE_DIR}"
+        rsync -az --delete --no-owner --no-group \
+          --exclude .venv --exclude .venv-ci --exclude __pycache__ --exclude .git --exclude .env \
+          --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
+          --exclude mimir_display.egg-info \
+          ./ ${TARGET}:${STAGE_DIR}/
+        ssh ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
         echo "Deploy complete."
 
   deploy:dry:
@@ -99,8 +104,14 @@ tasks:
       - |
         TARGET={{.CLI_ARGS}}
         if [ -z "$TARGET" ]; then echo "Usage: task deploy:dry -- user@host"; exit 1; fi
-        rsync -azn --exclude .venv --exclude __pycache__ --exclude .git --exclude .env \
-          ./ ${TARGET}:/opt/mimir-display/
+        STAGE_DIR="/tmp/mimir-display-deploy-${USER}"
+        echo "Dry-run: local -> ${TARGET}:${STAGE_DIR}/"
+        rsync -azn --delete --no-owner --no-group \
+          --exclude .venv --exclude .venv-ci --exclude __pycache__ --exclude .git --exclude .env \
+          --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
+          --exclude mimir_display.egg-info \
+          ./ ${TARGET}:${STAGE_DIR}/
+        echo "Note: this dry-run validates upload only; privileged sync into /opt/mimir-display runs in deploy."
 
   # ============================================================================
   # REMOTE  — interact with a running display

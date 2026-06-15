@@ -1,0 +1,10 @@
+{
+  "platform_url_override": "http://192.168.1.19:5000",
+  "mqtt_override": {
+    "host": "oak.local",
+    "port": 1883
+  },
+  "last_displayed": "2026-06-15T02:27:56.912307+00:00",
+  "last_content_path": "/home/ryan/.local/share/mimir-display/cache/4741315105a64ef5b5d895d5e7eef495.jpg",
+  "last_display_config": {}
+}

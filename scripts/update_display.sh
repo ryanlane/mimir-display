@@ -266,13 +266,30 @@ GIT_REV=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown
 if [[ $DRY_RUN == 0 ]]; then echo "$GIT_REV" > "$VERSION_FILE"; else echo "DRY_RUN: echo $GIT_REV > $VERSION_FILE"; fi
 info "Version stamp: $GIT_REV (stored in $VERSION_FILE)"
 
-# Verify ExecStart points to venv when using deployed install
+# Ensure ExecStart points to the current venv command when deployed in /opt.
+# This self-heals older installs that still reference /opt/mimir-display/venv/bin/mimir-display.
 if [[ $INSTALL_DIR == /opt/mimir-display ]]; then
+  EXPECTED_EXEC="${INSTALL_DIR}/.venv/bin/python -m mimir_display"
   EXEC_LINE=$(systemctl show "${SERVICE_NAME}.service" -p ExecStart 2>/dev/null | sed 's/ExecStart=//') || true
   if [[ -n $EXEC_LINE ]]; then
-    if [[ $EXEC_LINE != *"$INSTALL_DIR/.venv/bin/python"* ]]; then
-      warn "ExecStart does not reference $INSTALL_DIR/.venv/bin/python -> $EXEC_LINE"
-      warn "Consider updating unit to: ExecStart=$INSTALL_DIR/.venv/bin/python -m mimir_display"
+    if [[ $EXEC_LINE != *"$INSTALL_DIR/.venv/bin/python"* || $EXEC_LINE != *"mimir_display"* ]]; then
+      warn "ExecStart is stale or mismatched: $EXEC_LINE"
+      info "Applying systemd override: ExecStart=$EXPECTED_EXEC"
+      OVERRIDE_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+      OVERRIDE_FILE="${OVERRIDE_DIR}/override.conf"
+      if [[ $DRY_RUN == 0 ]]; then
+        maybe_sudo mkdir -p "$OVERRIDE_DIR"
+        maybe_sudo tee "$OVERRIDE_FILE" >/dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=$EXPECTED_EXEC
+EOF
+        maybe_sudo systemctl daemon-reload
+      else
+        echo "DRY_RUN: mkdir -p $OVERRIDE_DIR"
+        echo "DRY_RUN: write $OVERRIDE_FILE with ExecStart=$EXPECTED_EXEC"
+        echo "DRY_RUN: systemctl daemon-reload"
+      fi
     else
       info "ExecStart uses venv interpreter (good)"
     fi
