@@ -63,14 +63,22 @@ def _candidate_paths() -> list[Path]:
 def _detect_registration_state_dir() -> Path | None:
     for candidate in _candidate_paths():
         registration_path = candidate.with_name("registration_state.json")
-        if registration_path.exists():
-            return registration_path.parent
+        try:
+            if registration_path.exists():
+                return registration_path.parent
+        except PermissionError:
+            logger.debug("Skipping candidate %s (permission denied)", registration_path)
     return None
 
 
 def _resolve_path() -> Path:
     for candidate in _candidate_paths():
-        if candidate.exists():
+        try:
+            exists = candidate.exists()
+        except PermissionError:
+            logger.debug("Skipping candidate %s (permission denied)", candidate)
+            continue
+        if exists:
             logger.info("Using existing device config file: %s", candidate)
             return candidate
 

@@ -187,6 +187,42 @@ tasks:
           echo "  Service restarted — display will boot as unconfigured."
         ENDSSH
 
+  purge:
+    desc: "Completely remove mimir-display from a device (usage: task purge -- user@host)"
+    summary: |
+      Removes the deployed install, systemd unit overrides, persisted state,
+      caches, and the mimir-display service so the device can be reinstalled
+      from scratch.
+
+      Removes:
+        - /opt/mimir-display
+        - /var/lib/mimir-display
+        - ~/.mimir
+        - /etc/systemd/system/mimir-display.service.d
+
+      Then reloads systemd and resets failed service state.
+    prompt: "This will fully remove mimir-display from the target device. Continue?"
+    cmds:
+      - |
+        TARGET={{.CLI_ARGS}}
+        if [ -z "$TARGET" ]; then echo "Usage: task purge -- user@host"; exit 1; fi
+        echo "Purging mimir-display from $TARGET..."
+        ssh ${TARGET} bash -s << 'ENDSSH'
+          set -e
+          sudo systemctl stop mimir-display 2>/dev/null || true
+          sudo systemctl disable mimir-display 2>/dev/null || true
+          sudo rm -rf /opt/mimir-display
+          sudo rm -rf /var/lib/mimir-display
+          sudo rm -rf /etc/systemd/system/mimir-display.service.d
+          rm -rf "${HOME}/.mimir"
+          sudo systemctl daemon-reload
+          sudo systemctl reset-failed mimir-display 2>/dev/null || true
+          echo "  Removed install dir, state, and service overrides."
+          echo "  If you created a custom base unit outside this repo, remove it manually:"
+          echo "    /etc/systemd/system/mimir-display.service"
+          echo "    /lib/systemd/system/mimir-display.service"
+        ENDSSH
+
   # ============================================================================
   # CLEAN
   # ============================================================================
