@@ -181,3 +181,4 @@ cython_debug/
 .cursorindexingignore
 scripts/install_display_test.sh
 /.venv-ci
+data/mqtt_state.json
