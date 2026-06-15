@@ -182,3 +182,4 @@ cython_debug/
 scripts/install_display_test.sh
 /.venv-ci
 data/mqtt_state.json
+/data
