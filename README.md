@@ -111,7 +111,7 @@ mimir-display --backend auto
 | STARTUP_LOGO_PATH | Override path to startup image (defaults to built-in `startup.png`) | `/opt/mimir-display/logo.png` |
 | STARTUP_TEST_PATTERN | If `1` and HyperPixel backend, render diagnostic gradient before logo | `STARTUP_TEST_PATTERN=1` |
 | LOG_LEVEL | Logging threshold | `INFO` |
-| MQTT_BROKER_HOST / MQTT_BROKER_PORT | MQTT broker host/port | `oak.local` / `1883` |
+| MQTT_BROKER_HOST / MQTT_BROKER_PORT | MQTT broker host/port | `mimir.local` / `1883` |
 | DISPLAY_ID | Optional override (hostname slug used otherwise) | `DISPLAY_ID=myframe01` |
 | DEFAULT_CONTENT_PATH | Fallback image to show if assignments fail | `./example_default.png` |
 | HYPERPIXEL_RGB565_ENDIAN | `little` or `big` override for RGB565 writes | `HYPERPIXEL_RGB565_ENDIAN=little` |

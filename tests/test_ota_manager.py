@@ -35,7 +35,7 @@ def desired(version="1.0.7", phase="all", **overrides):
 def manager(tmp_path, monkeypatch):
     monkeypatch.setenv("OTA_DIR", str(tmp_path))
     monkeypatch.setattr(ota_module, "CLIENT_VERSION", "1.0.5")
-    return OtaUpdateManager(FakeConfig(platform_url="http://oak.local:5000"))
+    return OtaUpdateManager(FakeConfig(platform_url="http://mimir.local:5000"))
 
 
 def read_request(manager):
@@ -50,7 +50,7 @@ class TestHandleDesiredVersion:
         assert req["version"] == "1.0.7"
         assert req["current_version"] == "1.0.5"
         assert req["sha256"] == "deadbeef"
-        assert req["download_url"] == "http://oak.local:5000/api/client-releases/v1.0.7/download"
+        assert req["download_url"] == "http://mimir.local:5000/api/client-releases/v1.0.7/download"
 
     def test_skips_when_already_on_target(self, manager):
         assert manager.handle_desired_version(desired("1.0.5")) is False
@@ -96,7 +96,7 @@ class TestCanaryPhase:
         monkeypatch.setenv("OTA_DIR", str(tmp_path))
         monkeypatch.setattr(ota_module, "CLIENT_VERSION", "1.0.5")
         manager = OtaUpdateManager(
-            FakeConfig(platform_url="http://oak.local:5000", display_tags="kitchen, canary")
+            FakeConfig(platform_url="http://mimir.local:5000", display_tags="kitchen, canary")
         )
 
         assert manager.handle_desired_version(desired("1.0.7", phase="canary")) is True
