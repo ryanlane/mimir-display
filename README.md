@@ -19,7 +19,7 @@ Unified display client for Raspberry Pi supporting multiple hardware backends (I
 ## Quick Install (Interactive)
 
 ```bash
-curl -L https://raw.githubusercontent.com/<your-org>/mimir-display/main/scripts/install_display.sh -o install_display.sh
+curl -L https://raw.githubusercontent.com/ryanlane/mimir-display/main/scripts/install_display.sh -o install_display.sh
 chmod +x install_display.sh
 ./install_display.sh
 ```
@@ -57,14 +57,14 @@ task format
 task test
 
 # Deploy to a physical display
-task deploy -- pi@colorframe05.local        # rsync + restart
-task deploy:dry -- pi@colorframe05.local    # preview changes without writing
+task deploy -- pi@display-pi-01.local        # rsync + restart
+task deploy:dry -- pi@display-pi-01.local    # preview changes without writing
 
 # Interact with a running display
-task logs    -- pi@colorframe05.local       # stream journald logs
-task status  -- pi@colorframe05.local       # systemctl status
-task restart -- pi@colorframe05.local       # restart the service
-task ssh     -- pi@colorframe05.local       # open a shell
+task logs    -- pi@display-pi-01.local       # stream journald logs
+task status  -- pi@display-pi-01.local       # systemctl status
+task restart -- pi@display-pi-01.local       # restart the service
+task ssh     -- pi@display-pi-01.local       # open a shell
 ```
 
 ## Manual Service Connection Setup
@@ -396,7 +396,7 @@ version in `versions.yml`.
 The simplest path from your dev machine:
 
 ```bash
-task deploy -- pi@colorframe05.local
+task deploy -- pi@display-pi-01.local
 ```
 
 This rsyncs the repo to `/opt/mimir-display` (preserving the device's `.env`) and runs `update_display.sh` remotely. If you're working directly on the device, run the script manually:
