@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mimir-display"
-version = "1.0.23"
+version = "1.0.24"
 description = "Unified Mimir display client (Inky, HyperPixel, simulation)"
 readme = "README.md"
 license = {file = "LICENSE"}
