@@ -106,7 +106,7 @@ tasks:
           --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
           --exclude mimir_display.egg-info \
           ./ ${TARGET}:${STAGE_DIR}/
-        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
+        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
         echo "Deploy complete."
 
   deploy:dry:
