@@ -79,23 +79,34 @@ tasks:
   # ============================================================================
 
   deploy:
-    desc: "Deploy to a display over SSH (usage: task deploy -- pi@colorframe05.local)"
+    desc: "Deploy to a display over SSH (usage: task deploy -- user@host)"
     summary: |
       Rsyncs the repo to /opt/mimir-display on the target and runs update_display.sh.
       Preserves the existing .env on the device.
+
+      Uses SSH ControlMaster so all three connections (mkdir, rsync, install) share
+      one authenticated session — you are prompted for a password at most once.
+      Set up SSH key auth to eliminate the prompt entirely:
+        ssh-keygen -t ed25519          # if you don't have a key yet
+        ssh-copy-id user@host
     cmds:
       - |
         TARGET={{.CLI_ARGS}}
         if [ -z "$TARGET" ]; then echo "Usage: task deploy -- user@host"; exit 1; fi
         STAGE_DIR="/tmp/mimir-display-deploy-${USER}"
+        SOCK="/tmp/mimir-deploy-ctl-${USER}-$$"
+        SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SOCK} -o ControlPersist=60"
+        cleanup() { ssh -O exit -o ControlPath=${SOCK} ${TARGET} 2>/dev/null || true; }
+        trap cleanup EXIT
         echo "Deploying to $TARGET..."
-        ssh ${TARGET} "mkdir -p ${STAGE_DIR}"
+        ssh ${SSH_OPTS} ${TARGET} "mkdir -p ${STAGE_DIR}"
         rsync -az --delete --no-owner --no-group \
+          -e "ssh ${SSH_OPTS}" \
           --exclude .venv --exclude .venv-ci --exclude __pycache__ --exclude .git --exclude .env \
           --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
           --exclude mimir_display.egg-info \
           ./ ${TARGET}:${STAGE_DIR}/
-        ssh ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
+        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
         echo "Deploy complete."
 
   deploy:dry:
@@ -105,8 +116,12 @@ tasks:
         TARGET={{.CLI_ARGS}}
         if [ -z "$TARGET" ]; then echo "Usage: task deploy:dry -- user@host"; exit 1; fi
         STAGE_DIR="/tmp/mimir-display-deploy-${USER}"
+        SOCK="/tmp/mimir-deploy-ctl-${USER}-$$"
+        SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SOCK} -o ControlPersist=60"
+        trap "ssh -O exit -o ControlPath=${SOCK} ${TARGET} 2>/dev/null || true" EXIT
         echo "Dry-run: local -> ${TARGET}:${STAGE_DIR}/"
         rsync -azn --delete --no-owner --no-group \
+          -e "ssh ${SSH_OPTS}" \
           --exclude .venv --exclude .venv-ci --exclude __pycache__ --exclude .git --exclude .env \
           --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
           --exclude mimir_display.egg-info \
