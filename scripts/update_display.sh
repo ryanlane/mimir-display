@@ -298,6 +298,23 @@ EOF
   fi
 fi
 
+# Ensure avahi-daemon ordering is present in the installed service unit (one-time migration).
+UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+if [[ -f "$UNIT_PATH" ]] && ! grep -q "avahi-daemon" "$UNIT_PATH"; then
+  info "Patching $UNIT_PATH: adding avahi-daemon.service to After= / Wants="
+  if [[ $DRY_RUN == 0 ]]; then
+    maybe_sudo sed -i \
+      's/\(After=.*network-online\.target\)/\1 avahi-daemon.service/' \
+      "$UNIT_PATH"
+    maybe_sudo sed -i \
+      's/\(Wants=.*network-online\.target\)/\1 avahi-daemon.service/' \
+      "$UNIT_PATH"
+    maybe_sudo systemctl daemon-reload
+  else
+    echo "DRY_RUN: sed patch avahi-daemon into $UNIT_PATH && systemctl daemon-reload"
+  fi
+fi
+
 # Systemd reload + restart if unit exists (robust detection)
 service_unit="${SERVICE_NAME}.service"
 if [[ $SKIP_RESTART == 1 ]]; then

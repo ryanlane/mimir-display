@@ -255,6 +255,7 @@ def setup_logger(log_dir: str, level: str = "INFO") -> logging.Logger:
     logger = logging.getLogger("display_client")
     if logger.handlers:
         return logger  # already configured
+    logger.propagate = False  # prevent double output via root logger (basicConfig)
 
     level_map = {
         "DEBUG":   logging.DEBUG,

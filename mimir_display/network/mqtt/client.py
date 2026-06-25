@@ -163,6 +163,11 @@ class MqttDisplayClient:
 
     def _handle_fleet_desired(self, payload: dict[str, Any]) -> None:
         """Evaluate a fleet desired_version message (retained topic)."""
+        if self._pair_code:
+            # Pairing not yet complete — defer OTA so it doesn't restart the
+            # service mid-pairing and lose the active pair window.
+            self.logger.debug("OTA: deferring desired_version check until after pairing completes")
+            return
         try:
             wrote = self._ota.handle_desired_version(payload)
             if wrote:
