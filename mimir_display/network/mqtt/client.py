@@ -135,6 +135,11 @@ class MqttDisplayClient:
         if orientation:
             fields["orientation"] = orientation
 
+        # Include webhook port so the server can initiate pairing even when
+        # mDNS hasn't fired yet or arrives after the first heartbeat.
+        if self.config.webhook_enabled and self.config.webhook_port:
+            fields["webhook_port"] = self.config.webhook_port
+
         return fields
 
     def _apply_presence_fields(self) -> None:
