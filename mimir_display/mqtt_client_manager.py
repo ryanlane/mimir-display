@@ -215,9 +215,10 @@ class MqttDisplayClientManager:
     # ------------------------------------------------------------------
 
     async def _display_callback(self, content_path: Path, display_config: dict[str, Any]) -> dict[str, Any]:
+        loop = asyncio.get_running_loop()
         try:
             self.logger.info("Displaying content: %s", content_path)
-            self.display_manager.display_from_file(str(content_path))
+            await loop.run_in_executor(None, self.display_manager.display_from_file, str(content_path))
 
             # Persist scene assignment info if present
             scene_id = (display_config or {}).get("scene_id")
@@ -253,7 +254,7 @@ class MqttDisplayClientManager:
 
         except Exception as e:
             self.logger.error("Display callback failed: %s", e)
-            self._display_default()
+            await loop.run_in_executor(None, self._display_default)
             return {
                 "displayed": False,
                 "error": str(e),

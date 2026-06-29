@@ -244,32 +244,39 @@ def main() -> int:
     if getattr(args, 'health_server', False):
         _start_health_http_server(lambda: selected_backend.get_display_capabilities() if selected_backend else None, args.health_port, logger)
 
+    # Detect whether a loop is already running without leaving an active exception
+    # in scope. Calling asyncio.run() from inside an `except` block causes Python
+    # to attach the caught RuntimeError as __context__ on every exception that
+    # surfaces from the async code — producing confusing chained tracebacks.
+    _running_loop = None
     try:
-        # If there's no running loop, this raises RuntimeError
-        loop = asyncio.get_running_loop()
+        _running_loop = asyncio.get_running_loop()
     except RuntimeError:
-        # No loop running => safe to use asyncio.run()
-        try:
-            asyncio.run(runner())
-        except KeyboardInterrupt:
-            logger.info("Interrupted")
-            return 130
-        except RuntimeError as e:  # pragma: no cover - defensive
-            # On some Python versions a late signal during startup can surface
-            # as a 'no running event loop' error while shutting down. Treat as clean exit.
-            if 'no running event loop' in str(e).lower():
-                logger.debug("Suppressed benign shutdown RuntimeError: %s", e)
-                return 0
-            raise
-        else:
-            return 0
-    else:
+        pass
+
+    if _running_loop is not None:
         # A loop is already running (e.g., inside uvicorn/Jupyter).
         # We cannot call asyncio.run(); instead schedule the task and return.
         logger.info("Event loop already running; scheduling runner() as a background task.")
-        loop.create_task(runner())
+        _running_loop.create_task(runner())
         # Do NOT sys.exit() here; let the hosting process manage lifecycle.
         return 0
+
+    # No loop running — safe to use asyncio.run(), called outside any except
+    # block so its exceptions carry no inherited __context__.
+    try:
+        asyncio.run(runner())
+    except KeyboardInterrupt:
+        logger.info("Interrupted")
+        return 130
+    except RuntimeError as e:  # pragma: no cover - defensive
+        # On some Python versions a late signal during startup can surface
+        # as a 'no running event loop' error while shutting down. Treat as clean exit.
+        if 'no running event loop' in str(e).lower():
+            logger.debug("Suppressed benign shutdown RuntimeError: %s", e)
+            return 0
+        raise
+    return 0
 
 
 if __name__ == "__main__":
