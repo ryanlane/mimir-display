@@ -6,6 +6,7 @@ Unified display client for Raspberry Pi supporting multiple hardware backends (I
 * Dynamic backend selection (`--backend` or `DISPLAY_BACKEND=auto`)
 * Inky and HyperPixel RGB565 framebuffer support (multi-bpp, stride + RGB565 endianness/channel overrides)
 * Generic HDMI fullscreen window backend (pygame or tkinter fallback)
+* Animated WebP/GIF playback on framebuffer backends (HDMI, HyperPixel) — frames pre-converted once, looped via mmap writes; e-ink shows the first frame
 * RGB LED Matrix (hzeller/rpi-rgb-led-matrix) backend for HUB75 panels (via `rgbmatrix` bindings)
 * Orientation handling via `DISPLAY_ORIENTATION` (landscape / portrait_left / portrait_right)
 * Startup logo image (centered) + optional HyperPixel test pattern (`STARTUP_TEST_PATTERN=1`)

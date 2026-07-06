@@ -228,20 +228,50 @@ def _convert_image(img: Image.Image, bpp: int) -> bytes:
     return bytes(out)
 
 
+_SIM_LOGGED = False
+
+
+def display_pil(img: Image.Image) -> None:
+    """Write a PIL image straight to the framebuffer — no file round-trip.
+
+    Animation fast path: AnimationPlayer calls this per frame. Contract
+    matches display_image (any-size image in; resized to native here).
+    """
+    display_frame_bytes(prepare_frame(img))
+
+
+def prepare_frame(img: Image.Image) -> bytes:
+    """Convert a PIL image to native framebuffer bytes.
+
+    Animation playback pre-converts every frame once — the RGB565 pixel
+    conversion is far too slow to run per frame inside the play loop."""
+    img = img.convert("RGB")
+    w, h, _, _ = _framebuffer_sizes()
+    if img.size != (w, h):
+        img = img.resize((w, h), Image.LANCZOS)
+    _, _, bpp = _detect_geometry()
+    return _convert_image(img, bpp)
+
+
+def display_frame_bytes(data: bytes) -> None:
+    """Write pre-converted framebuffer bytes (from prepare_frame)."""
+    _write_framebuffer(data)
+
+
 def display_image(image_path: str) -> None:
     """Display image file on HyperPixel framebuffer."""
     if not os.path.exists(image_path):
         raise FileNotFoundError(image_path)
-    img = Image.open(image_path).convert("RGB")
-    w, h, _, _ = _framebuffer_sizes()
-    if img.size != (w, h):
-        img = img.resize((w, h), Image.LANCZOS)
+    display_pil(Image.open(image_path))
+
+
+def _write_framebuffer(data: bytes) -> None:
     if not hardware_available():
-        print(f"SIMULATION: Would display {image_path} on {FB_PATH}")
+        global _SIM_LOGGED
+        if not _SIM_LOGGED:
+            print(f"SIMULATION: Would write frames to {FB_PATH} (logged once)")
+            _SIM_LOGGED = True
         return
-    # Convert according to detected/forced bpp
-    _, _, bpp = _detect_geometry()
-    data = _convert_image(img, bpp)
     w, h, bpp_bytes, fb_size = _framebuffer_sizes()
     stride = _get_stride(w, bpp_bytes)
     with open(FB_PATH, "r+b", buffering=0) as fb:

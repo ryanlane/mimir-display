@@ -84,6 +84,41 @@ def display_image(image_path: str) -> None:
     print(f"SIMULATION: would display {image_path}")
 
 
+def supports_pil_playback() -> bool:
+    """True when the active backend can take PIL frames directly —
+    the prerequisite for animation playback (no per-frame file I/O)."""
+    mod = _ensure_backend()
+    return callable(getattr(mod, "display_pil", None))
+
+
+def display_pil(img) -> None:
+    """Push one PIL frame to the backend. Raises if unsupported —
+    callers must check supports_pil_playback() first."""
+    mod = _ensure_backend()
+    fn = getattr(mod, "display_pil", None)
+    if fn is None:
+        raise NotImplementedError(f"backend has no display_pil: {_backend_key}")
+    fn(img)
+
+
+def supports_frame_bytes() -> bool:
+    """True when the backend can pre-convert frames to raw framebuffer
+    bytes and write them directly — the fastest playback path."""
+    mod = _ensure_backend()
+    return (callable(getattr(mod, "prepare_frame", None))
+            and callable(getattr(mod, "display_frame_bytes", None)))
+
+
+def prepare_frame(img) -> bytes:
+    """Convert a PIL frame to native framebuffer bytes (backend-specific)."""
+    return _ensure_backend().prepare_frame(img)
+
+
+def display_frame_bytes(data: bytes) -> None:
+    """Write pre-converted framebuffer bytes to the panel."""
+    _ensure_backend().display_frame_bytes(data)
+
+
 def is_development_mode() -> bool:
     mod = _ensure_backend()
     if hasattr(mod, "is_development_mode"):
@@ -104,6 +139,11 @@ HARDWARE_AVAILABLE = _hardware_available()
 __all__ = [
     "get_display_resolution",
     "display_image",
+    "display_pil",
+    "supports_pil_playback",
+    "supports_frame_bytes",
+    "prepare_frame",
+    "display_frame_bytes",
     "is_development_mode",
     "get_display_capabilities",
     "HARDWARE_AVAILABLE",

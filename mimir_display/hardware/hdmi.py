@@ -261,17 +261,52 @@ def _convert_image(img: Image.Image, w: int, h: int, bpp: int) -> bytes:
     return bytes(out)
 
 
+_SIM_LOGGED = False
+
+
+def display_pil(img: Image.Image) -> None:
+    """Write a PIL image straight to the framebuffer — no file round-trip.
+
+    This is the animation fast path: AnimationPlayer calls it per frame,
+    so it must not touch disk. Contract matches display_image (any-size
+    image in; conversion/letterboxing to native geometry happens here).
+    """
+    display_frame_bytes(prepare_frame(img))
+
+
+def prepare_frame(img: Image.Image) -> bytes:
+    """Convert a PIL image to native framebuffer bytes.
+
+    Animation playback pre-converts every frame once — the Python pixel
+    conversion is far too slow to run per frame inside the play loop."""
+    w, h, bpp = _detect_geometry()
+    return _convert_image(img, w, h, bpp)
+
+
+def display_frame_bytes(data: bytes) -> None:
+    """Write pre-converted framebuffer bytes (from prepare_frame)."""
+    w, h, bpp = _detect_geometry()
+    _write_framebuffer(data, w, h, bpp)
+
+
 def display_image(image_path: str) -> None:
     if not os.path.exists(image_path):
         raise FileNotFoundError(image_path)
     w, h, bpp = _detect_geometry()
     img = Image.open(image_path)
     data = _convert_image(img, w, h, bpp)
+    _write_framebuffer(data, w, h, bpp)
+
+
+def _write_framebuffer(data: bytes, w: int, h: int, bpp: int) -> None:
     stride = _get_stride()
     bytes_pp = 2 if bpp == 16 else max(bpp // 8, 3)
     fb_size = stride * h
     if not hardware_available():
-        print(f"[hdmi] SIMULATION: would display {image_path} on {FB_PATH}")
+        global _SIM_LOGGED
+        if not _SIM_LOGGED:
+            print(f"[hdmi] SIMULATION: would write frames to {FB_PATH} (logged once)")
+            _SIM_LOGGED = True
         return
     with open(FB_PATH, "r+b", buffering=0) as fb:
         mm = mmap.mmap(fb.fileno(), fb_size, mmap.MAP_SHARED, mmap.PROT_WRITE)

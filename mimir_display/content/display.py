@@ -15,6 +15,7 @@ from PIL import Image, ImageOps  # type: ignore
 # Unified hardware abstraction (selects correct backend automatically)
 from mimir_display.hardware import HARDWARE_AVAILABLE
 from mimir_display.hardware import display_image as hw_display_image
+from mimir_display.content.animation import AnimationPlayer, load_animation_frames
 
 
 class DisplayManager:
@@ -27,6 +28,8 @@ class DisplayManager:
         self.capabilities = capabilities or {}
         self.cache_dir = cache_dir
         self.logger = logger
+        # Active animation playback, if any. Any new content stops it first.
+        self._anim_player: AnimationPlayer | None = None
 
         # Ensure any temp files created by libraries land in our cache_dir
         # so our retention/cleanup policies apply and /tmp does not grow.
@@ -60,42 +63,102 @@ class DisplayManager:
             self.hw_w, self.hw_h = self.logical_w, self.logical_h
 
     # ---- Public API expected by the rest of the app ----
+    def stop_animation(self) -> None:
+        """Stop any running animation loop (synchronous)."""
+        if self._anim_player is not None:
+            self._anim_player.stop()
+            self._anim_player = None
+            self.logger.info("DisplayManager: animation playback stopped")
+
+    def _fit_for_display(self, img: Image.Image) -> Image.Image:
+        """The full static fit pipeline: letterbox + orientation rotation."""
+        target_w, target_h = self._target_resolution()
+        img = self._fit_image(img, target_w, target_h)
+        if self.rotation_deg:
+            img = img.rotate(self.rotation_deg, expand=True)
+            # After rotation, hardware expects landscape native (hw_w x hw_h).
+            # If dimensions mismatch due to non-square letterboxing,
+            # letterbox again to native hardware.
+            if (img.width, img.height) != (self.hw_w, self.hw_h):
+                img = self._fit_image(img, self.hw_w, self.hw_h)
+        return img
+
+    def _try_play_animation(self, img: Image.Image) -> bool:
+        """Start looping playback if the backend can take PIL frames.
+
+        Returns False when playback isn't possible (e-ink, old backends) —
+        the caller falls back to the static first-frame path.
+        """
+        from mimir_display import hardware as hw
+        if not getattr(hw, "supports_pil_playback", lambda: False)():
+            return False
+        try:
+            frames, durations = load_animation_frames(img, self._fit_for_display)
+        except Exception as exc:  # noqa: BLE001 — decode failure falls back to static
+            self.logger.warning("Animation decode failed (%s) — falling back to first frame", exc)
+            return False
+        if len(frames) < 2:
+            return False
+
+        # Preferred path: pre-convert every frame to raw framebuffer bytes
+        # once, so the play loop is just an mmap write per frame. Without
+        # it the per-frame pixel conversion caps playback at a few fps.
+        writer = hw.display_pil
+        payload = frames
+        if getattr(hw, "supports_frame_bytes", lambda: False)():
+            try:
+                payload = [hw.prepare_frame(f) for f in frames]
+                writer = hw.display_frame_bytes
+            except Exception as exc:  # noqa: BLE001 — fall back to PIL writes
+                self.logger.warning("Frame pre-conversion failed (%s) — using PIL path", exc)
+                payload = frames
+                writer = hw.display_pil
+
+        player = AnimationPlayer(payload, durations, writer, self.logger)
+        player.start()
+        self._anim_player = player
+        return True
+
     def display_from_file(self, path: str | Path) -> None:
         """
         Load an image file, fit to panel, and display it via the hardware backend.
+        Animated WebP/GIF loops play on animation-capable backends; everything
+        else (and every static file) renders once through the static path.
         """
         path = str(path)
         self.logger.info("DisplayManager: rendering %s", path)
 
+        # New content always replaces any running animation.
+        self.stop_animation()
+
         # 1) Load
         img = Image.open(path)
         if getattr(img, "is_animated", False):
-            # Animated WebP/GIF (e.g. the Generative Art source's animated
-            # output): playback isn't supported yet, so deliberately show
+            if self._try_play_animation(img):
+                self.logger.info(
+                    "Animated image (%s frames) — playback started",
+                    getattr(img, "n_frames", "?"),
+                )
+                self._mark_recent_and_clean(path)
+                return
+            # Backend can't play frames (e-ink etc.) — deliberately show
             # the first frame rather than whatever frame Pillow lands on.
             self.logger.info(
-                "Animated image (%s frames) — displaying first frame; playback not yet supported",
+                "Animated image (%s frames) — displaying first frame; backend has no playback",
                 getattr(img, "n_frames", "?"),
             )
             img.seek(0)
         img = img.convert("RGB")  # ensure a sane mode for Inky drivers
 
-        # 2) Fit to target resolution/orientation
-        target_w, target_h = self._target_resolution()
-        img = self._fit_image(img, target_w, target_h)
-
-        # 3) Rotate according to physical orientation so hardware sees correct orientation
-        if self.rotation_deg:
-            img = img.rotate(self.rotation_deg, expand=True)
-
-            # After rotation, hardware expects landscape native (hw_w x hw_h). If dimensions mismatch
-            # due to potential non-square letterboxing, resize/crop letterbox again to native hardware.
-            if (img.width, img.height) != (self.hw_w, self.hw_h):
-                img = self._fit_image(img, self.hw_w, self.hw_h)
+        # 2+3) Fit to target resolution/orientation and rotate for hardware
+        img = self._fit_for_display(img)
 
         # 4) Send to hardware
         self._hw_display_image(img)
 
+        self._mark_recent_and_clean(path)
+
+    def _mark_recent_and_clean(self, path: str) -> None:
         # Mark the source file as most-recent to protect it during pruning
         try:
             if str(path).startswith(self.cache_dir) and os.path.isfile(path):
@@ -189,6 +252,7 @@ class DisplayManager:
         Args:
             data: Raw image data to process and display
         """
+        self.stop_animation()
         processed_path = self.process_image_data(data)
         try:
             self.display_image(processed_path)
@@ -216,6 +280,7 @@ class DisplayManager:
             self.logger.info("No default content to display")
             return
 
+        self.stop_animation()
         temp_path = None
         try:
             self.logger.info("Displaying default content: %s", default_path)
