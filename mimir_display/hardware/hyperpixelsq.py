@@ -359,6 +359,8 @@ def get_display_capabilities() -> dict:
         # webp/gif accepted since Pillow decodes them; animated files
         # currently display their first frame (see DisplayManager).
         "supported_formats": ["jpg", "jpeg", "png", "webp", "gif"],
+        # 30 Hz LCD — animation-capable once playback lands.
+        "supports_animation": True,
         "refresh_rate_hz": 30,
         "redis_distribution": True,
         "content_claiming": True,

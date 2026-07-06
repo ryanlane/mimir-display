@@ -117,6 +117,7 @@ def get_display_capabilities() -> dict:
         "resolution": [oinfo.logical_width, oinfo.logical_height],  # logical (may be swapped)
         "native_resolution": [native_w, native_h],                  # always hardware landscape order
         "supported_formats": ["jpg", "jpeg", "png"],
+        "supports_animation": False,
         "orientation": oinfo.name,
         "rotation_deg": oinfo.rotation_deg,
         "refresh_rate_hz": 1,

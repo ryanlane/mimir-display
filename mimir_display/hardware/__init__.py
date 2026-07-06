@@ -51,6 +51,7 @@ def get_display_capabilities() -> dict:
             "resolution": [800, 480],
             "native_resolution": [800, 480],
             "supported_formats": ["jpg", "jpeg", "png"],
+            "supports_animation": False,
             "orientation": "landscape",
             "rotation_deg": 0,
             "refresh_rate_hz": 1,

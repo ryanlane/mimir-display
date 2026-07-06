@@ -34,6 +34,7 @@ class SimulationBackend:
             "orientation": self._caps.orientation,
             "rotation_deg": self._caps.rotation_deg,
             "supported_formats": ["jpg", "jpeg", "png"],
+        "supports_animation": False,
             "redis_distribution": True,
             "content_claiming": True,
             "simulation_mode": True,

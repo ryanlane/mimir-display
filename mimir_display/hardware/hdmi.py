@@ -307,6 +307,9 @@ def get_display_capabilities() -> dict:
         # webp/gif accepted since Pillow decodes them; animated files
         # currently display their first frame (see DisplayManager).
         "supported_formats": ["jpg", "jpeg", "png", "webp", "gif"],
+        # HDMI panels can refresh fast enough for animated content once
+        # playback lands; advertised now so the platform can negotiate.
+        "supports_animation": True,
         "redis_distribution": True,
         "content_claiming": True,
         "simulation_mode": not hardware_available(),

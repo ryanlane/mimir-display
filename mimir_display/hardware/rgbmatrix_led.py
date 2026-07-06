@@ -277,6 +277,7 @@ def get_display_capabilities() -> dict:
         "orientation": oinfo.name,
         "rotation_deg": oinfo.rotation_deg,
         "supported_formats": ["jpg", "jpeg", "png"],
+        "supports_animation": False,
         "redis_distribution": True,
         "content_claiming": True,
         "simulation_mode": is_development_mode(),

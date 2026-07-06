@@ -146,6 +146,7 @@ class MDNSService:
                     b"orientation": orientation.encode(),
                     b"rotation_deg": (str(rotation).encode() if rotation is not None else b""),
                     b"native_resolution": (native_res_str.encode() if native_res_str else b""),
+                    b"supports_animation": (b"1" if caps.get("supports_animation") else b"0"),
                 },
                 server=f"mimir-display-{self.display_client.display_id}.local.",
             )
