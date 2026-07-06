@@ -69,6 +69,15 @@ class DisplayManager:
 
         # 1) Load
         img = Image.open(path)
+        if getattr(img, "is_animated", False):
+            # Animated WebP/GIF (e.g. the Generative Art source's animated
+            # output): playback isn't supported yet, so deliberately show
+            # the first frame rather than whatever frame Pillow lands on.
+            self.logger.info(
+                "Animated image (%s frames) — displaying first frame; playback not yet supported",
+                getattr(img, "n_frames", "?"),
+            )
+            img.seek(0)
         img = img.convert("RGB")  # ensure a sane mode for Inky drivers
 
         # 2) Fit to target resolution/orientation

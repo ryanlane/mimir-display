@@ -356,7 +356,9 @@ def get_display_capabilities() -> dict:
         "native_resolution": [w, h],
         "orientation": oinfo.name,
         "rotation_deg": oinfo.rotation_deg,
-        "supported_formats": ["jpg", "jpeg", "png"],
+        # webp/gif accepted since Pillow decodes them; animated files
+        # currently display their first frame (see DisplayManager).
+        "supported_formats": ["jpg", "jpeg", "png", "webp", "gif"],
         "refresh_rate_hz": 30,
         "redis_distribution": True,
         "content_claiming": True,
