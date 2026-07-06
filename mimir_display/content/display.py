@@ -7,6 +7,7 @@ for the e-ink display hardware.
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,11 @@ class DisplayManager:
         self.cache_dir = cache_dir
         self.logger = logger
         # Active animation playback, if any. Any new content stops it first.
+        # The generation counter lets an in-flight background preparation
+        # detect it has been superseded and abandon itself.
         self._anim_player: AnimationPlayer | None = None
+        self._anim_lock = threading.Lock()
+        self._anim_generation = 0
 
         # Ensure any temp files created by libraries land in our cache_dir
         # so our retention/cleanup policies apply and /tmp does not grow.
@@ -64,10 +69,14 @@ class DisplayManager:
 
     # ---- Public API expected by the rest of the app ----
     def stop_animation(self) -> None:
-        """Stop any running animation loop (synchronous)."""
-        if self._anim_player is not None:
-            self._anim_player.stop()
+        """Stop any running animation loop and invalidate in-flight
+        background preparation (synchronous)."""
+        with self._anim_lock:
+            self._anim_generation += 1
+            player = self._anim_player
             self._anim_player = None
+        if player is not None:
+            player.stop()
             self.logger.info("DisplayManager: animation playback stopped")
 
     def _fit_for_display(self, img: Image.Image) -> Image.Image:
@@ -83,41 +92,57 @@ class DisplayManager:
                 img = self._fit_image(img, self.hw_w, self.hw_h)
         return img
 
-    def _try_play_animation(self, img: Image.Image) -> bool:
-        """Start looping playback if the backend can take PIL frames.
+    def _start_animation_async(self, path: str) -> None:
+        """Kick off background preparation of an animation loop.
 
-        Returns False when playback isn't possible (e-ink, old backends) —
-        the caller falls back to the static first-frame path.
+        The caller has already rendered the first frame statically, so the
+        command handler returns immediately — multi-frame decode and
+        pre-conversion can take seconds on Pi-class hardware and must
+        never block the server's request. If new content arrives before
+        preparation finishes, the generation check abandons the result.
         """
+        with self._anim_lock:
+            generation = self._anim_generation
+        threading.Thread(
+            target=self._prepare_and_start_animation,
+            args=(path, generation),
+            name="mimir-animation-prep",
+            daemon=True,
+        ).start()
+
+    def _prepare_and_start_animation(self, path: str, generation: int) -> None:
         from mimir_display import hardware as hw
-        if not getattr(hw, "supports_pil_playback", lambda: False)():
-            return False
         try:
+            img = Image.open(path)
             frames, durations = load_animation_frames(img, self._fit_for_display)
-        except Exception as exc:  # noqa: BLE001 — decode failure falls back to static
-            self.logger.warning("Animation decode failed (%s) — falling back to first frame", exc)
-            return False
-        if len(frames) < 2:
-            return False
+            if len(frames) < 2:
+                return
 
-        # Preferred path: pre-convert every frame to raw framebuffer bytes
-        # once, so the play loop is just an mmap write per frame. Without
-        # it the per-frame pixel conversion caps playback at a few fps.
-        writer = hw.display_pil
-        payload = frames
-        if getattr(hw, "supports_frame_bytes", lambda: False)():
-            try:
-                payload = [hw.prepare_frame(f) for f in frames]
-                writer = hw.display_frame_bytes
-            except Exception as exc:  # noqa: BLE001 — fall back to PIL writes
-                self.logger.warning("Frame pre-conversion failed (%s) — using PIL path", exc)
-                payload = frames
-                writer = hw.display_pil
+            # Preferred path: pre-convert every frame to raw framebuffer
+            # bytes once, so the play loop is just an mmap write per frame.
+            writer = hw.display_pil
+            payload = frames
+            if getattr(hw, "supports_frame_bytes", lambda: False)():
+                try:
+                    payload = []
+                    for frame in frames:
+                        if generation != self._anim_generation:
+                            return  # superseded mid-preparation
+                        payload.append(hw.prepare_frame(frame))
+                    writer = hw.display_frame_bytes
+                except Exception as exc:  # noqa: BLE001 — fall back to PIL writes
+                    self.logger.warning("Frame pre-conversion failed (%s) — using PIL path", exc)
+                    payload = frames
+                    writer = hw.display_pil
 
-        player = AnimationPlayer(payload, durations, writer, self.logger)
-        player.start()
-        self._anim_player = player
-        return True
+            player = AnimationPlayer(payload, durations, writer, self.logger)
+            with self._anim_lock:
+                if generation != self._anim_generation:
+                    return  # newer content arrived while preparing
+                self._anim_player = player
+                player.start()
+        except Exception as exc:  # noqa: BLE001 — prep failure leaves the static frame up
+            self.logger.warning("Animation preparation failed (%s) — static first frame remains", exc)
 
     def display_from_file(self, path: str | Path) -> None:
         """
@@ -133,21 +158,28 @@ class DisplayManager:
 
         # 1) Load
         img = Image.open(path)
-        if getattr(img, "is_animated", False):
-            if self._try_play_animation(img):
-                self.logger.info(
-                    "Animated image (%s frames) — playback started",
-                    getattr(img, "n_frames", "?"),
-                )
-                self._mark_recent_and_clean(path)
-                return
-            # Backend can't play frames (e-ink etc.) — deliberately show
-            # the first frame rather than whatever frame Pillow lands on.
-            self.logger.info(
-                "Animated image (%s frames) — displaying first frame; backend has no playback",
-                getattr(img, "n_frames", "?"),
-            )
+        animated = getattr(img, "is_animated", False)
+        n_frames = getattr(img, "n_frames", 1)  # before convert() discards it
+        can_play = False
+        if animated:
+            from mimir_display import hardware as hw
+            can_play = getattr(hw, "supports_pil_playback", lambda: False)()
+            # Always render the first frame NOW — the display shows content
+            # immediately and the command handler stays fast; playback (when
+            # supported) is prepared in the background and takes over.
             img.seek(0)
+            if can_play:
+                self.logger.info(
+                    "Animated image (%s frames) — first frame now, preparing playback in background",
+                    n_frames,
+                )
+            else:
+                # E-ink etc. — deliberately show the first frame rather
+                # than whatever frame Pillow lands on.
+                self.logger.info(
+                    "Animated image (%s frames) — displaying first frame; backend has no playback",
+                    n_frames,
+                )
         img = img.convert("RGB")  # ensure a sane mode for Inky drivers
 
         # 2+3) Fit to target resolution/orientation and rotate for hardware
@@ -155,6 +187,9 @@ class DisplayManager:
 
         # 4) Send to hardware
         self._hw_display_image(img)
+
+        if animated and can_play and n_frames > 1:
+            self._start_animation_async(path)
 
         self._mark_recent_and_clean(path)
 

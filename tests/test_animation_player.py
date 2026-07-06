@@ -103,22 +103,81 @@ class TestDisplayManagerPlayback:
             logger=LOGGER,
         )
 
+    @staticmethod
+    def _wait_for_player(manager, timeout=3.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            player = manager._anim_player
+            if player is not None and player.running:
+                return player
+            time.sleep(0.02)
+        raise AssertionError("animation player did not start in time")
+
     def test_animated_file_plays_when_backend_supports_pil(self, tmp_path, monkeypatch):
         import mimir_display.hardware as hw
         written = []
         monkeypatch.setattr(hw, "supports_pil_playback", lambda: True, raising=False)
+        monkeypatch.setattr(hw, "supports_frame_bytes", lambda: False, raising=False)
         monkeypatch.setattr(hw, "display_pil", lambda img: written.append(img.getpixel((20, 12))), raising=False)
 
         p = tmp_path / "anim.webp"
         _make_animated_webp(p, n=3)
         manager = self._manager(tmp_path)
+        manager._hw_display_image = lambda img: None  # first-frame static render
         manager.display_from_file(p)
-        assert manager._anim_player is not None and manager._anim_player.running
+        self._wait_for_player(manager)
         time.sleep(0.25)
         manager.stop_animation()
         distinct = set(written)
         assert len(written) >= 3
         assert len(distinct) >= 2, "playback must cycle through distinct frames"
+
+    def test_display_call_returns_fast_even_when_prep_is_slow(self, tmp_path, monkeypatch):
+        """Regression: multi-frame preparation must happen in the background.
+        A synchronous prep blocked the display command handler long enough
+        to trip the server's 10s request timeout on real hardware."""
+        import mimir_display.hardware as hw
+        monkeypatch.setattr(hw, "supports_pil_playback", lambda: True, raising=False)
+        monkeypatch.setattr(hw, "supports_frame_bytes", lambda: True, raising=False)
+
+        def slow_prepare(frame):
+            time.sleep(0.2)  # simulate Pi-speed conversion
+            return b"frame"
+        written = []
+        monkeypatch.setattr(hw, "prepare_frame", slow_prepare, raising=False)
+        monkeypatch.setattr(hw, "display_frame_bytes", lambda d: written.append(d), raising=False)
+
+        p = tmp_path / "anim.webp"
+        _make_animated_webp(p, n=4)
+        manager = self._manager(tmp_path)
+        manager._hw_display_image = lambda img: None
+
+        started = time.monotonic()
+        manager.display_from_file(p)
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.15, f"display_from_file blocked for {elapsed:.2f}s — prep must be async"
+
+        self._wait_for_player(manager)  # playback still arrives afterwards
+        manager.stop_animation()
+
+    def test_superseded_prep_never_installs_player(self, tmp_path, monkeypatch):
+        import mimir_display.hardware as hw
+        monkeypatch.setattr(hw, "supports_pil_playback", lambda: True, raising=False)
+        monkeypatch.setattr(hw, "supports_frame_bytes", lambda: True, raising=False)
+        monkeypatch.setattr(hw, "prepare_frame", lambda f: (time.sleep(0.1), b"x")[1], raising=False)
+        monkeypatch.setattr(hw, "display_frame_bytes", lambda d: None, raising=False)
+
+        anim = tmp_path / "anim.webp"
+        _make_animated_webp(anim, n=4)
+        static = tmp_path / "still.png"
+        Image.new("RGB", (40, 24), (9, 9, 9)).save(static)
+
+        manager = self._manager(tmp_path)
+        manager._hw_display_image = lambda img: None
+        manager.display_from_file(anim)     # prep starts in background (~0.4s)
+        manager.display_from_file(static)   # supersedes it immediately
+        time.sleep(0.8)                     # give the stale prep time to finish
+        assert manager._anim_player is None, "superseded prep must not install a player"
 
     def test_animated_file_falls_back_to_first_frame_without_pil(self, tmp_path, monkeypatch):
         import mimir_display.hardware as hw
@@ -137,6 +196,7 @@ class TestDisplayManagerPlayback:
     def test_new_static_content_stops_running_animation(self, tmp_path, monkeypatch):
         import mimir_display.hardware as hw
         monkeypatch.setattr(hw, "supports_pil_playback", lambda: True, raising=False)
+        monkeypatch.setattr(hw, "supports_frame_bytes", lambda: False, raising=False)
         monkeypatch.setattr(hw, "display_pil", lambda img: None, raising=False)
 
         anim = tmp_path / "anim.webp"
@@ -147,8 +207,7 @@ class TestDisplayManagerPlayback:
         manager = self._manager(tmp_path)
         manager._hw_display_image = lambda img: None
         manager.display_from_file(anim)
-        player = manager._anim_player
-        assert player is not None and player.running
+        player = self._wait_for_player(manager)
 
         manager.display_from_file(static)
         assert manager._anim_player is None

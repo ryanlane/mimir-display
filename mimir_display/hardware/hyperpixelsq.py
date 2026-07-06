@@ -176,6 +176,65 @@ def _write_word(out: bytearray, idx: int, value: int) -> None:
         out[idx + 1] = value & 0xFF
 
 
+_FAST_ENCODE_OK: dict[tuple, bool] = {}
+
+
+def _rgb565_bytes(img: Image.Image) -> bytes:
+    """RGB565 little-endian via C-level channel arithmetic:
+    hi = (r & F8) | (g >> 5), lo = ((g & 1C) << 3) | (b >> 3), interleaved
+    lo,hi per pixel by an LA merge. Bit fields never overlap, so the
+    saturating adds are exact."""
+    from PIL import ImageChops
+    r, g, b = img.split()
+    hi = ImageChops.add(r.point(lambda v: v & 0xF8), g.point(lambda v: v >> 5))
+    lo = ImageChops.add(g.point(lambda v: (v & 0x1C) << 3), b.point(lambda v: v >> 3))
+    return Image.merge("LA", (lo, hi)).tobytes()
+
+
+def _fast_encode(img: Image.Image, bpp: int) -> bytes:
+    """C-speed conversion via Pillow raw encoders. Raises when the
+    configured layout has no fast encoder — callers fall back to the
+    per-pixel loop."""
+    img = img.convert("RGB")
+    if bpp == 16:
+        if _CHANNEL_ORDER == "bgr":
+            r, g, b = img.split()
+            img = Image.merge("RGB", (b, g, r))
+        data = _rgb565_bytes(img)  # RGB565, little-endian
+        if _BYTE_ORDER == "big":
+            buf = bytearray(len(data))
+            buf[0::2] = data[1::2]
+            buf[1::2] = data[0::2]
+            data = bytes(buf)
+        return data
+    if bpp == 24:
+        seq = ''.join([c for c in _SEQ_8888 if c in 'RGB'][:3]) or 'BGR'
+        if seq not in ("RGB", "BGR"):
+            raise ValueError(f"no fast encoder for 24bpp seq {seq!r}")
+        return img.tobytes("raw", seq)
+    raw = {"BGRX": "BGRX", "RGBX": "RGBX", "XRGB": "XRGB", "XBGR": "XBGR"}.get(_SEQ_8888)
+    if raw is None:
+        raise ValueError(f"no fast encoder for 32bpp seq {_SEQ_8888!r}")
+    return img.tobytes("raw", raw)
+
+
+def _fast_encode_verified(bpp: int) -> bool:
+    """Fast path is only trusted after a probe image converts to the exact
+    bytes the per-pixel loop produces for the active configuration."""
+    key = (bpp, _BYTE_ORDER, _CHANNEL_ORDER, _SEQ_8888)
+    ok = _FAST_ENCODE_OK.get(key)
+    if ok is None:
+        try:
+            probe = Image.new("RGB", (4, 2))
+            probe.putdata([(0, 0, 0), (255, 255, 255), (255, 0, 0), (0, 255, 0),
+                           (0, 0, 255), (17, 130, 213), (250, 8, 121), (66, 66, 66)])
+            ok = _fast_encode(probe, bpp) == _convert_pixels_slow(probe, bpp)
+        except Exception:
+            ok = False
+        _FAST_ENCODE_OK[key] = ok
+    return ok
+
+
 def _convert_image(img: Image.Image, bpp: int) -> bytes:
     """Convert PIL image to framebuffer native format.
 
@@ -183,6 +242,10 @@ def _convert_image(img: Image.Image, bpp: int) -> bytes:
       * 16bpp RGB565 with configurable channel + byte order
       * 24bpp RGB/BGR (use first 3 chars of _SEQ_8888) – stored as 3 bytes
       * 32bpp XRGB8888 / variants via 4-char sequence env (default BGRX)
+
+    Uses Pillow's C encoders when they produce byte-identical output for
+    the active configuration (verified once against the reference loop) —
+    essential for animation, where this runs per frame.
     """
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
@@ -190,6 +253,13 @@ def _convert_image(img: Image.Image, bpp: int) -> bytes:
     target = (w, h)
     if img.size != target:
         img = img.resize(target, Image.LANCZOS)
+    if _fast_encode_verified(bpp):
+        return _fast_encode(img, bpp)
+    return _convert_pixels_slow(img, bpp)
+
+
+def _convert_pixels_slow(img: Image.Image, bpp: int) -> bytes:
+    """Reference per-pixel conversion — correct for any layout, slow."""
     px = img.load()
     w, h = img.size
 
