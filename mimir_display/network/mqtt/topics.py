@@ -16,5 +16,11 @@ class MqttTopicManager:
     @property
     def pair_ack(self) -> str: return f"{self.base}/pair/ack"
 
+    @property
+    def registration_reply(self) -> str:
+        # Canonical reply topic for proactive registration (spec §7.2) —
+        # `reg/reply` matches the Windows client so all displays converge.
+        return f"{self.base}/reg/reply"
+
     @staticmethod
     def pair_request() -> str: return "mimir/registry/pair"
