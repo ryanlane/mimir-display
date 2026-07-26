@@ -109,6 +109,42 @@ tasks:
         ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
         echo "Deploy complete."
 
+  deploy:init:
+    desc: "First-time remote install to a fresh device (usage: task deploy:init -- user@host [--backend inky|hdmi|rgbmatrix|hyperpixelsq|auto])"
+    summary: |
+      Like deploy, but for a device that has never had mimir-display installed
+      (e.g. a freshly imaged Pi). Rsyncs the repo to /opt/mimir-display, then
+      runs install_display.sh there (creates the venv, installs extras, seeds
+      .env, creates + enables the systemd service), starts the service, and
+      finally runs update_display.sh once so the OTA updater units install
+      correctly (the service now exists, so its User= resolves instead of
+      install_ota_updater.sh falling back to a hardcoded 'pi').
+
+      Non-interactive: backend is auto-detected unless you pass --backend;
+      PLATFORM_URL / MQTT_BROKER_HOST are left blank for mDNS bootstrap.
+      Safe to re-run — install_display.sh reuses an existing venv/service.
+    cmds:
+      - |
+        RAW={{.CLI_ARGS}}
+        TARGET=$(awk '{print $1}' <<<"$RAW")
+        if [ -z "$TARGET" ]; then echo "Usage: task deploy:init -- user@host [--backend inky|hdmi|rgbmatrix|hyperpixelsq|auto]"; exit 1; fi
+        EXTRA_ARGS=$(awk '{$1=""; print $0}' <<<"$RAW" | sed 's/^ *//')
+        STAGE_DIR="/tmp/mimir-display-deploy-${USER}"
+        SOCK="/tmp/mimir-deploy-ctl-${USER}-$$"
+        SSH_OPTS="-o ControlMaster=auto -o ControlPath=${SOCK} -o ControlPersist=60"
+        cleanup() { ssh -O exit -o ControlPath=${SOCK} ${TARGET} 2>/dev/null || true; }
+        trap cleanup EXIT
+        echo "First-time install to $TARGET..."
+        ssh ${SSH_OPTS} ${TARGET} "mkdir -p ${STAGE_DIR}"
+        rsync -az --delete --no-owner --no-group \
+          -e "ssh ${SSH_OPTS}" \
+          --exclude .venv --exclude .venv-ci --exclude __pycache__ --exclude .git --exclude .env \
+          --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
+          --exclude mimir_display.egg-info \
+          ./ ${TARGET}:${STAGE_DIR}/
+        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/install_display.sh --mode editable --service -y ${EXTRA_ARGS} && sudo systemctl enable --now mimir-display && sudo bash scripts/update_display.sh"
+        echo "First-time install complete."
+
   deploy:dry:
     desc: "Dry-run deploy (shows what would change, no writes)"
     cmds:
@@ -243,14 +279,18 @@ tasks:
     summary: |
       Performs a full clean reinstall sequence on the target:
         1) task purge -- user@host
-        2) task deploy -- user@host
+        2) task deploy:init -- user@host
+
+      Uses deploy:init (not deploy) because purge removes the systemd service,
+      so the target is back to a fresh-device state and needs the full
+      install_display.sh pass, not just the update path.
     prompt: "This will purge and then redeploy mimir-display on the target. Continue?"
     cmds:
       - |
         TARGET={{.CLI_ARGS}}
         if [ -z "$TARGET" ]; then echo "Usage: task reinstall:clean -- user@host"; exit 1; fi
         task purge -- "$TARGET"
-        task deploy -- "$TARGET"
+        task deploy:init -- "$TARGET"
 
   # ============================================================================
   # CLEAN

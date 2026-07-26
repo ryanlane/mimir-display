@@ -345,6 +345,18 @@ log "Upgrading pip/setuptools/wheel ..."
 python -m pip install -U pip setuptools wheel
 
 ### -----------------------------
+### Ensure Python dev headers (needed to build RPi.GPIO, spidev, etc.)
+### -----------------------------
+PY_INCLUDE_DIR="$(python -c 'import sysconfig; print(sysconfig.get_path("include"))' 2>/dev/null || true)"
+if [[ -z "$PY_INCLUDE_DIR" || ! -f "$PY_INCLUDE_DIR/Python.h" ]]; then
+  warn "Python.h not found; installing python3-dev (needed to build RPi.GPIO/spidev C extensions)"
+  apt_try_install python3-dev || true
+  if [[ -z "$PY_INCLUDE_DIR" || ! -f "$PY_INCLUDE_DIR/Python.h" ]]; then
+    warn "Still no Python.h after apt install; C-extension packages (RPi.GPIO, spidev) will likely fail to build."
+  fi
+fi
+
+### -----------------------------
 ### ARMv6 special handling (system numpy)
 ### -----------------------------
 if [[ "${ARCH}" == "armv6l" ]]; then
@@ -377,9 +389,9 @@ fi
 ### Preinstall NumPy as a wheel (if possible)
 ### -----------------------------
 log "Attempting to preinstall NumPy as a wheel (to avoid source builds) ..."
-if ! python -m pip install --only-binary=:all: "numpy<2" ; then
+if ! python -m pip install --only-binary=:all: "numpy" ; then
   warn "No suitable NumPy wheel for this Python/arch. We'll proceed, but pip may attempt a slow source build."
-  warn "If install stalls at 'Installing backend dependencies ...', relax the NumPy pin or switch to aarch64 with PiWheels."
+  warn "If install stalls at 'Installing backend dependencies ...', switch to aarch64 with PiWheels or a Python version PyPI/PiWheels has NumPy wheels for."
 fi
 
 ### -----------------------------

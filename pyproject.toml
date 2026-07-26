@@ -38,7 +38,7 @@ dependencies = [
 [project.optional-dependencies]
 inky = [
     "inky",
-    "numpy<2.0.0",
+    "numpy",
     "RPi.GPIO>=0.7.1",
     "spidev>=3.5",
 ]
@@ -55,7 +55,7 @@ hdmi = [
 all = [
     # Convenience meta-extra; user installs all hardware support + dev tooling
     "inky",
-    "numpy<2.0.0",
+    "numpy",
     "RPi.GPIO>=0.7.1",
     "spidev>=3.5",
     "pygame>=2.5.0",
