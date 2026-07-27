@@ -345,7 +345,10 @@ tasks:
           exit 1
         fi
 
-        CURRENT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+        CURRENT=$(grep -m1 '^version = "' pyproject.toml | sed -E 's/^version = "([^"]+)"/\1/')
+        if [ -z "$CURRENT" ]; then
+          echo "Could not find a 'version = \"...\"' line in pyproject.toml"; exit 1
+        fi
         echo "Current version: $CURRENT  ->  New version: $VERSION"
 
         if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
