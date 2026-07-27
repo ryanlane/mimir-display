@@ -309,3 +309,63 @@ tasks:
     cmds:
       - task: clean
       - rm -rf {{.VENV}}
+
+  # ============================================================================
+  # RELEASE  — cut a GitHub release via .github/workflows/release.yml
+  # ============================================================================
+
+  release:
+    desc: "Bump version, commit, tag, and push to trigger the release workflow (usage: task release -- 1.0.47)"
+    summary: |
+      Drives the release process documented in .github/workflows/release.yml:
+        1) Bump the `version` field in pyproject.toml to the given X.Y.Z
+        2) Commit that change
+        3) Tag vX.Y.Z (must match pyproject.toml exactly — CI verifies this)
+        4) Push the branch and the tag
+
+      Pushing the tag triggers CI to build the sdist/wheel, generate
+      manifest.json, and publish the GitHub Release with those files attached.
+
+      After the release lands, bump `display-client:` in
+      mimir-release/versions.yml so the server rolls it out to the fleet —
+      this task does not do that part.
+    prompt: "This will commit, tag, and push to origin. Continue?"
+    cmds:
+      - |
+        set -euo pipefail
+        VERSION={{.CLI_ARGS}}
+        if [ -z "$VERSION" ]; then echo "Usage: task release -- X.Y.Z"; exit 1; fi
+        if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "Version must look like X.Y.Z (no leading 'v'), got: $VERSION"; exit 1
+        fi
+
+        if [ -n "$(git status --porcelain)" ]; then
+          echo "Working tree is not clean — commit or stash first:"
+          git status --short
+          exit 1
+        fi
+
+        CURRENT=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+        echo "Current version: $CURRENT  ->  New version: $VERSION"
+
+        if git rev-parse "v${VERSION}" >/dev/null 2>&1; then
+          echo "Tag v${VERSION} already exists"; exit 1
+        fi
+
+        sed -i "s/^version = \"${CURRENT}\"/version = \"${VERSION}\"/" pyproject.toml
+        if ! grep -q "^version = \"${VERSION}\"" pyproject.toml; then
+          echo "Failed to update version in pyproject.toml (expected line 'version = \"${CURRENT}\"' not found)"
+          exit 1
+        fi
+
+        BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        git add pyproject.toml
+        git commit -m "chore: bump version to ${VERSION}"
+        git tag "v${VERSION}"
+
+        echo "Pushing ${BRANCH} and tag v${VERSION}..."
+        git push origin "${BRANCH}"
+        git push origin "v${VERSION}"
+
+        echo "Pushed. CI will build and publish the release: https://github.com/$(git remote get-url origin | sed -E 's#.*github.com[:/](.+)\.git#\1#')/actions"
+        echo "Reminder: bump display-client: in mimir-release/versions.yml once the release is live."
