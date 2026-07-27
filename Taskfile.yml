@@ -329,12 +329,51 @@ tasks:
       After the release lands, bump `display-client:` in
       mimir-release/versions.yml so the server rolls it out to the fleet —
       this task does not do that part.
+
+      See also: release:bump, which picks the next patch version for you.
     prompt: "This will commit, tag, and push to origin. Continue?"
     cmds:
       - |
-        set -euo pipefail
         VERSION={{.CLI_ARGS}}
         if [ -z "$VERSION" ]; then echo "Usage: task release -- X.Y.Z"; exit 1; fi
+      - task: _cut-release
+        vars:
+          VERSION: "{{.CLI_ARGS}}"
+
+  release:bump:
+    desc: "Auto-increment the patch version, then commit/tag/push (usage: task release:bump)"
+    summary: |
+      Same as `release`, but computes the next version for you by bumping
+      the patch number in pyproject.toml (X.Y.Z -> X.Y.(Z+1)). Use `release`
+      directly for a minor/major bump.
+    prompt: "This will commit, tag, and push to origin. Continue?"
+    vars:
+      NEXT_VERSION:
+        sh: |
+          CURRENT=$(grep -m1 '^version = "' pyproject.toml | sed -E 's/^version = "([^"]+)"/\1/')
+          if [ -z "$CURRENT" ]; then echo "ERROR: no version line found in pyproject.toml" >&2; exit 1; fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$PATCH" ]; then
+            echo "ERROR: version '$CURRENT' is not X.Y.Z" >&2; exit 1
+          fi
+          echo "${MAJOR}.${MINOR}.$((PATCH + 1))"
+    cmds:
+      - echo "Next version -> {{.NEXT_VERSION}}"
+      - task: _cut-release
+        vars:
+          VERSION: "{{.NEXT_VERSION}}"
+
+  # Internal — shared by release and release:bump. Not meant to be run
+  # directly (skips the "did you mean to bump X.Y vs X.Y.Z" judgment call
+  # those tasks make before delegating here).
+  _cut-release:
+    internal: true
+    requires:
+      vars: [VERSION]
+    cmds:
+      - |
+        set -euo pipefail
+        VERSION="{{.VERSION}}"
         if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
           echo "Version must look like X.Y.Z (no leading 'v'), got: $VERSION"; exit 1
         fi
