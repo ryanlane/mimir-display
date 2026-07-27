@@ -471,7 +471,7 @@ if [[ "$BACKEND" == "inky" ]]; then
   if [[ -n $CONFIG_PATH ]]; then
     step "Checking SPI / I2C overlays for Inky HAT"
     NEED_REBOOT=0
-    for PARAM in "dtparam=spi=on" "dtparam=i2c_arm=on"; do
+    for PARAM in "dtparam=spi=on" "dtparam=i2c_arm=on" "dtoverlay=spi0-0cs"; do
       if grep -q "^${PARAM}" "$CONFIG_PATH"; then
         log "  ${PARAM} already set"
       else
@@ -493,8 +493,9 @@ if [[ "$BACKEND" == "inky" ]]; then
     if (( NEED_REBOOT == 1 )); then
       warn "SPI/I2C changes written — a reboot is required before the Inky display will work."
     fi
-    # CS contention note: if Inky init fails with SPI errors after reboot, add
-    # dtoverlay=spi0-0cs to $CONFIG_PATH (see README § Inky E-Ink SPI Chip Select Contention).
+    # dtoverlay=spi0-0cs prevents the kernel from auto-claiming GPIO8 (SPI0 CS0),
+    # which otherwise fights gpiodevice/libgpiod for the pin and makes inky.show()
+    # raise SystemExit ("some pins we need are in use!") on every refresh.
   else
     warn "Could not locate config.txt — enable SPI and I2C manually (raspi-config or dtparam=spi=on / dtparam=i2c_arm=on)."
   fi
