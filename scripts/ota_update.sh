@@ -95,7 +95,10 @@ ACTUAL_SHA=$(sha256sum "$ARTIFACT_PATH" | cut -d' ' -f1)
 log "artifact verified"
 
 # ---------- venv install ----------
-if [ ! -x "$VERSION_DIR/.venv/bin/python" ]; then
+# A venv interrupted mid-creation (e.g. power loss during ensurepip) has a
+# python but no pip; reusing it fails every retry, so rebuild it.
+if [ ! -x "$VERSION_DIR/.venv/bin/python" ] || [ ! -x "$VERSION_DIR/.venv/bin/pip" ]; then
+  rm -rf "$VERSION_DIR/.venv"
   python3 -m venv "$VERSION_DIR/.venv" || fail "$VERSION" "venv creation failed"
 fi
 "$VERSION_DIR/.venv/bin/pip" install --upgrade pip wheel >/dev/null 2>&1 || true
