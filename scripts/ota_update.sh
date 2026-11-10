@@ -117,6 +117,19 @@ else
   log "health check OK"
 fi
 
+# ---------- import check: will the service load THIS release? ----------
+# `python -m` puts the working directory ($INSTALL_DIR) first on sys.path, so a
+# source checkout at $INSTALL_DIR/mimir_display (left by `task deploy`) shadows
+# the release's site-packages. PYTHONSAFEPATH=1 (set in ota.conf) prevents that
+# on Python >= 3.11; on older Pythons it is ignored, and this check fails the
+# update instead of letting the client re-request it forever.
+IMPORTED=$(cd "$INSTALL_DIR" && runuser -u "$SERVICE_USER" -- env PYTHONSAFEPATH=1 \
+  "$VERSION_DIR/.venv/bin/python" -c 'import mimir_display; print(mimir_display.__file__)' 2>&1 || true)
+case "$IMPORTED" in
+  "$VERSION_DIR"/*) log "import check OK ($IMPORTED)" ;;
+  *) fail "$VERSION" "release would not be imported from $INSTALL_DIR (got: $IMPORTED)" ;;
+esac
+
 # ---------- flip symlink + systemd drop-in ----------
 PREVIOUS_TARGET=""
 [ -L "$CURRENT_LINK" ] && PREVIOUS_TARGET=$(readlink "$CURRENT_LINK")
@@ -127,14 +140,34 @@ if [ ! -f "$DROPIN_DIR/ota.conf" ]; then
   mkdir -p "$DROPIN_DIR"
   cat > "$DROPIN_DIR/ota.conf" <<EOF
 # Managed by ota_update.sh — points the service at the OTA 'current' symlink.
+# PYTHONSAFEPATH keeps a source checkout in WorkingDirectory from shadowing the release.
 [Service]
 ExecStart=
 ExecStart=$CURRENT_LINK/.venv/bin/python -m mimir_display
 WorkingDirectory=$INSTALL_DIR
+Environment=PYTHONSAFEPATH=1
 EOF
   DROPIN_CREATED=1
   log "systemd drop-in installed (service now follows $CURRENT_LINK)"
+elif ! grep -q '^Environment=PYTHONSAFEPATH=1' "$DROPIN_DIR/ota.conf"; then
+  # ota.conf from an older updater: it only has a [Service] section, so appending is safe.
+  echo 'Environment=PYTHONSAFEPATH=1' >> "$DROPIN_DIR/ota.conf"
+  log "added PYTHONSAFEPATH=1 to existing ota.conf"
 fi
+# Drop-ins apply in name order, so any later file that sets ExecStart (e.g. the
+# override.conf older update_display.sh versions wrote) beats ota.conf and pins
+# the legacy venv. Strip ExecStart from every other drop-in, keeping a backup
+# so rollback can restore the unit exactly as it was.
+STRIPPED_DROPINS=()
+for f in "$DROPIN_DIR"/*.conf; do
+  [ -f "$f" ] && [ "$f" != "$DROPIN_DIR/ota.conf" ] || continue
+  if grep -q '^ExecStart=' "$f"; then
+    log "removing ExecStart from $f (it overrides ota.conf)"
+    cp -p "$f" "$f.ota-bak"
+    sed -i '/^ExecStart=/d' "$f"
+    STRIPPED_DROPINS+=("$f")
+  fi
+done
 systemctl daemon-reload
 
 # ---------- restart + verify ----------
@@ -145,9 +178,23 @@ rollback() {
   elif [ "$DROPIN_CREATED" = "1" ]; then
     rm -f "$DROPIN_DIR/ota.conf"   # first OTA: fall back to the legacy unit paths
   fi
+  # Restore drop-ins we stripped, otherwise a first-OTA rollback (ota.conf
+  # removed) could leave the service with no ExecStart at all.
+  local f
+  for f in "${STRIPPED_DROPINS[@]}"; do
+    [ -f "$f.ota-bak" ] && mv -f "$f.ota-bak" "$f"
+  done
   systemctl daemon-reload
   systemctl restart "$SERVICE_NAME" || true
 }
+
+# Verify systemd will actually run the release we just installed; otherwise the
+# restart below would "succeed" on old code.
+EFFECTIVE_EXEC=$(systemctl show "$SERVICE_NAME" -p ExecStart --value 2>/dev/null || true)
+if [[ $EFFECTIVE_EXEC != *"$CURRENT_LINK/.venv/bin/python"* ]]; then
+  rollback
+  fail "$VERSION" "service ExecStart does not follow $CURRENT_LINK: $EFFECTIVE_EXEC"
+fi
 
 systemctl restart "$SERVICE_NAME"
 sleep 8
@@ -156,6 +203,7 @@ if ! systemctl is-active --quiet "$SERVICE_NAME"; then
   fail "$VERSION" "service failed to start on v$VERSION — rolled back"
 fi
 log "service active on v$VERSION"
+for f in "${STRIPPED_DROPINS[@]}"; do rm -f "$f.ota-bak"; done
 
 write_status ok "$VERSION"
 

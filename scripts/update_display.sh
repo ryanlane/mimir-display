@@ -142,13 +142,17 @@ if [[ "$SERVICE_USER" == "root" ]]; then
       fi
     fi
   fi
-elif [[ "$SERVICE_USER" == "mimir" ]]; then
-  info "Ensuring proper ownership for service data directories (mimir user)"
+else
+  # Any non-root service user: the packaged unit uses "mimir", but hand-edited
+  # units often run as the login user. The data dir (cache, state, and the OTA
+  # request dir the client writes) must belong to whoever the service runs as.
+  SERVICE_GROUP=$(id -gn "$SERVICE_USER" 2>/dev/null || echo "$SERVICE_USER")
+  info "Ensuring proper ownership for service data directories ($SERVICE_USER:$SERVICE_GROUP)"
   if [[ -d "/var/lib/mimir-display" ]]; then
     if [[ $DRY_RUN == 0 ]]; then
-      maybe_sudo chown -R mimir:mimir /var/lib/mimir-display
+      maybe_sudo chown -R "$SERVICE_USER:$SERVICE_GROUP" /var/lib/mimir-display
     else
-      echo "DRY_RUN: chown -R mimir:mimir /var/lib/mimir-display"
+      echo "DRY_RUN: chown -R $SERVICE_USER:$SERVICE_GROUP /var/lib/mimir-display"
     fi
   fi
 fi
@@ -268,7 +272,51 @@ info "Version stamp: $GIT_REV (stored in $VERSION_FILE)"
 
 # Ensure ExecStart points to the current venv command when deployed in /opt.
 # This self-heals older installs that still reference /opt/mimir-display/venv/bin/mimir-display.
-if [[ $INSTALL_DIR == /opt/mimir-display ]]; then
+#
+# Once the OTA updater has run, ota.conf owns ExecStart (it points at
+# $INSTALL_DIR/current/.venv). This script must never override it: an
+# override.conf sorts after ota.conf, so it silently pins the legacy venv and
+# every later OTA "succeeds" while the frame keeps running old code.
+OTA_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+OTA_DROPIN="${OTA_DROPIN_DIR}/ota.conf"
+LEGACY_OVERRIDE="${OTA_DROPIN_DIR}/override.conf"
+if [[ $INSTALL_DIR == /opt/mimir-display && -f $OTA_DROPIN && ! -x $INSTALL_DIR/current/.venv/bin/python ]]; then
+  # ota.conf points at a release that no longer exists (e.g. an older `task deploy`
+  # rsync --delete removed releases/ and current). Keeping it would leave the
+  # service unable to start, so disable it and fall back to the legacy venv below.
+  warn "$OTA_DROPIN points at $INSTALL_DIR/current, which has no venv; disabling it (next OTA reinstalls)"
+  if [[ $DRY_RUN == 0 ]]; then
+    maybe_sudo mv -f "$OTA_DROPIN" "${OTA_DROPIN}.disabled"
+    maybe_sudo systemctl daemon-reload
+  else
+    echo "DRY_RUN: mv $OTA_DROPIN ${OTA_DROPIN}.disabled && systemctl daemon-reload"
+  fi
+fi
+if [[ $INSTALL_DIR == /opt/mimir-display && -f $OTA_DROPIN ]]; then
+  info "ExecStart is managed by the OTA updater ($OTA_DROPIN); leaving it alone"
+  # `python -m` searches WorkingDirectory ($INSTALL_DIR) first, so the checkout this
+  # script deploys there would shadow the OTA release. PYTHONSAFEPATH=1 stops that.
+  if ! grep -q '^Environment=PYTHONSAFEPATH=1' "$OTA_DROPIN"; then
+    info "Adding PYTHONSAFEPATH=1 to $OTA_DROPIN"
+    if [[ $DRY_RUN == 0 ]]; then
+      echo 'Environment=PYTHONSAFEPATH=1' | maybe_sudo tee -a "$OTA_DROPIN" >/dev/null
+      maybe_sudo systemctl daemon-reload
+    else
+      echo "DRY_RUN: append Environment=PYTHONSAFEPATH=1 to $OTA_DROPIN"
+    fi
+  fi
+  if [[ -f $LEGACY_OVERRIDE ]] && grep -q '^ExecStart=' "$LEGACY_OVERRIDE"; then
+    warn "$LEGACY_OVERRIDE overrides the OTA ExecStart and pins the legacy venv; removing its ExecStart"
+    # Delete the file if it only holds what this script used to write; otherwise strip just ExecStart lines.
+    if grep -vqE '^[[:space:]]*(\[Service\]|ExecStart=.*|#.*)?[[:space:]]*$' "$LEGACY_OVERRIDE"; then
+      if [[ $DRY_RUN == 0 ]]; then maybe_sudo sed -i '/^ExecStart=/d' "$LEGACY_OVERRIDE"; else echo "DRY_RUN: strip ExecStart lines from $LEGACY_OVERRIDE"; fi
+    else
+      if [[ $DRY_RUN == 0 ]]; then maybe_sudo rm -f "$LEGACY_OVERRIDE"; else echo "DRY_RUN: rm -f $LEGACY_OVERRIDE"; fi
+    fi
+    if [[ $DRY_RUN == 0 ]]; then maybe_sudo systemctl daemon-reload; else echo "DRY_RUN: systemctl daemon-reload"; fi
+  fi
+  warn "The service runs the OTA release in $INSTALL_DIR/current; code deployed to $INSTALL_DIR/.venv by this script will not run on this frame"
+elif [[ $INSTALL_DIR == /opt/mimir-display ]]; then
   EXPECTED_EXEC="${INSTALL_DIR}/.venv/bin/python -m mimir_display"
   EXEC_LINE=$(systemctl show "${SERVICE_NAME}.service" -p ExecStart 2>/dev/null | sed 's/ExecStart=//') || true
   if [[ -n $EXEC_LINE ]]; then

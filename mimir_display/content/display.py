@@ -13,10 +13,11 @@ from typing import Any
 
 from PIL import Image, ImageOps  # type: ignore
 
+from mimir_display.content.animation import AnimationPlayer, load_animation_frames
+
 # Unified hardware abstraction (selects correct backend automatically)
 from mimir_display.hardware import HARDWARE_AVAILABLE
 from mimir_display.hardware import display_image as hw_display_image
-from mimir_display.content.animation import AnimationPlayer, load_animation_frames
 
 
 class DisplayManager:

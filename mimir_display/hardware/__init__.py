@@ -14,11 +14,14 @@ Public API (stable):
 
 from __future__ import annotations
 
+import logging
 import os
 import traceback
 from typing import Any
 
 from .loader import load_backend
+
+_logger = logging.getLogger(__name__)
 
 _backend_mod: Any | None = None
 _backend_key: str | None = None
@@ -78,9 +81,12 @@ def display_image(image_path: str) -> None:
         try:
             mod.display_image(image_path)
             return
-        except Exception:  # pragma: no cover - log suppressed here
-            pass
-    # Fallback noop / debug print
+        except Exception:
+            # Never swallow this silently: a hardware fault here used to surface
+            # only as "SIMULATION: would display", hiding the real exception.
+            _logger.exception("Display backend %s failed to show %s; image NOT displayed", _backend_key, image_path)
+            return
+    # Backend without display support: noop
     print(f"SIMULATION: would display {image_path}")
 
 

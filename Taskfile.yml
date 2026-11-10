@@ -82,7 +82,7 @@ tasks:
     desc: "Deploy to a display over SSH (usage: task deploy -- user@host)"
     summary: |
       Rsyncs the repo to /opt/mimir-display on the target and runs update_display.sh.
-      Preserves the existing .env on the device.
+      Preserves the existing .env, the OTA releases/ + current symlink and runstate/ on the device.
 
       Uses SSH ControlMaster so all three connections (mkdir, rsync, install) share
       one authenticated session — you are prompted for a password at most once.
@@ -106,7 +106,7 @@ tasks:
           --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
           --exclude mimir_display.egg-info \
           ./ ${TARGET}:${STAGE_DIR}/
-        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
+        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv --exclude /releases --exclude /current --exclude /runstate --exclude /mimir_display.legacy ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/update_display.sh"
         echo "Deploy complete."
 
   deploy:init:
@@ -142,7 +142,7 @@ tasks:
           --exclude .pytest_cache --exclude .ruff_cache --exclude .vscode --exclude htmlcov \
           --exclude mimir_display.egg-info \
           ./ ${TARGET}:${STAGE_DIR}/
-        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/install_display.sh --mode editable --service -y ${EXTRA_ARGS} && sudo systemctl enable --now mimir-display && sudo bash scripts/update_display.sh"
+        ssh ${SSH_OPTS} ${TARGET} "sudo mkdir -p /opt/mimir-display && sudo rsync -a --delete --exclude .env --exclude .venv --exclude /releases --exclude /current --exclude /runstate --exclude /mimir_display.legacy ${STAGE_DIR}/ /opt/mimir-display/ && rm -rf ${STAGE_DIR} && cd /opt/mimir-display && sudo bash scripts/install_display.sh --mode editable --service -y ${EXTRA_ARGS} && sudo systemctl enable --now mimir-display && sudo bash scripts/update_display.sh"
         echo "First-time install complete."
 
   deploy:dry:
