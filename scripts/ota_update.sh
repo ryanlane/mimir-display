@@ -102,7 +102,10 @@ if [ ! -x "$VERSION_DIR/.venv/bin/python" ] || [ ! -x "$VERSION_DIR/.venv/bin/pi
   python3 -m venv "$VERSION_DIR/.venv" || fail "$VERSION" "venv creation failed"
 fi
 "$VERSION_DIR/.venv/bin/pip" install --upgrade pip wheel >/dev/null 2>&1 || true
-"$VERSION_DIR/.venv/bin/pip" install "mimir-display[$EXTRAS] @ file://$ARTIFACT_PATH" \
+# --prefer-binary: a dep released without an armv6 wheel yet (zeroconf 0.154.0,
+# 2026-11-09) otherwise compiles from source on a Pi Zero for 30+ min and the
+# updater unit times out. Take the newest version that has a wheel instead.
+"$VERSION_DIR/.venv/bin/pip" install --prefer-binary "mimir-display[$EXTRAS] @ file://$ARTIFACT_PATH" \
   || fail "$VERSION" "pip install failed"
 log "installed into $VERSION_DIR/.venv"
 
