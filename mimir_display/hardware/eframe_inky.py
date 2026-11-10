@@ -67,7 +67,9 @@ def _init_inky_if_needed() -> None:
             import gpiodevice  # type: ignore
             if hasattr(gpiodevice, "check_pins_available"):
                 def _noop_check(*_a, **_k):
-                    return False
+                    # True = "pins available". Returning False made gpiodevice
+                    # reject every chip ("suitable gpiochip device not found").
+                    return True
                 gpiodevice.check_pins_available = _noop_check  # type: ignore
                 patched_pin_check = True
         except Exception:  # pragma: no cover - best effort
@@ -90,7 +92,7 @@ def _init_inky_if_needed() -> None:
                 import gpiodevice  # type: ignore
                 if hasattr(gpiodevice, "check_pins_available"):
                     def _noop_check(*_a, **_k):
-                        return False
+                        return True  # see note above: True = "pins available"
                     gpiodevice.check_pins_available = _noop_check  # type: ignore
                     from inky.auto import auto  # type: ignore
                     inky = auto(ask_user=False, verbose=False)
