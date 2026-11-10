@@ -86,6 +86,23 @@ class OtaUpdateManager:
             pass
         status = self.read_status()
         if (
+            status.get("result") == "ok"
+            and _norm(status.get("target_version")) == _norm(target)
+        ):
+            # The updater says it installed `target`, yet we are not running it
+            # (e.g. a source checkout shadowing the release). Re-requesting would
+            # reinstall + restart every few seconds, so back off like a failure.
+            try:
+                age = time.time() - (self.ota_dir / "status.json").stat().st_mtime
+            except OSError:
+                age = FAILED_RETRY_SECONDS
+            if age < FAILED_RETRY_SECONDS:
+                logger.warning(
+                    "OTA: updater reports v%s installed but this client is v%s; not re-requesting for %ds",
+                    target, CLIENT_VERSION, int(FAILED_RETRY_SECONDS - age),
+                )
+                return f"installed_but_not_running({int(age)}s)"
+        if (
             status.get("result") == "failed"
             and _norm(status.get("target_version")) == _norm(target)
         ):

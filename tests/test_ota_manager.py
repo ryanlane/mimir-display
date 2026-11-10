@@ -132,6 +132,19 @@ class TestFailureBackoff:
 
         assert manager.handle_desired_version(desired("1.0.7")) is True
 
+    def test_installed_but_not_running_backs_off(self, manager):
+        # Updater installed 1.0.7 but the client still runs 1.0.5 (shadowed
+        # import): must not re-request, or it reinstalls + restarts in a loop.
+        self.write_status(manager, result="ok", age_seconds=60)
+
+        assert manager.handle_desired_version(desired("1.0.7")) is False
+        assert not (manager.ota_dir / "request.json").exists()
+
+    def test_installed_but_not_running_retries_after_backoff(self, manager):
+        self.write_status(manager, result="ok", age_seconds=FAILED_RETRY_SECONDS + 60)
+
+        assert manager.handle_desired_version(desired("1.0.7")) is True
+
 
 class TestPresenceFields:
     def test_empty_without_status_or_canary(self, manager):
