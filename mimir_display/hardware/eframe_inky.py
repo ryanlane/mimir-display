@@ -178,6 +178,14 @@ def get_inky_colour_variant() -> str:
     return getattr(inky, "colour", getattr(inky, "color", "unknown"))
 
 
+def _quantize_to_panel_palette(img: Image.Image, saturation: float = 0.5) -> Image.Image:
+    """Map ``img`` onto the panel's colour palette (what inky's set_image does internally)."""
+    palette = list(inky._palette_blend(saturation))  # type: ignore[union-attr]
+    palette_image = Image.new("P", (1, 1))
+    palette_image.putpalette(palette + [0, 0, 0] * (256 - len(palette) // 3))
+    return img.convert("RGB").quantize(palette=palette_image, dither=Image.Dither.FLOYDSTEINBERG)
+
+
 def show_on_inky(image_path: str) -> None:
     global simulation_mode
     _init_inky_if_needed()
@@ -186,7 +194,17 @@ def show_on_inky(image_path: str) -> None:
         return
     logger.info("Updating image: %s", image_path)
     img = Image.open(image_path)
-    inky.set_image(img)
+    try:
+        inky.set_image(img)
+    except ValueError as e:
+        # inky 2.6 (e.g. AC073TC1A) + Pillow 13: set_image reads the palette
+        # image's `.im` before its palette is loaded into the core image, so
+        # Pillow raises "empty palette". Quantize to the panel palette ourselves;
+        # set_image skips its own conversion for mode "P" images.
+        if "empty palette" not in str(e) or not hasattr(inky, "_palette_blend"):
+            raise
+        logger.warning("[INKY] set_image hit Pillow 'empty palette'; using pre-quantized image")
+        inky.set_image(_quantize_to_panel_palette(img))
     try:
         inky.set_border(inky.BLACK)  # some variants
     except Exception:  # pragma: no cover - not all support border
