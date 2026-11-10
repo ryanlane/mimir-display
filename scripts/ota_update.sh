@@ -123,11 +123,14 @@ fi
 # the release's site-packages. PYTHONSAFEPATH=1 (set in ota.conf) prevents that
 # on Python >= 3.11; on older Pythons it is ignored, and this check fails the
 # update instead of letting the client re-request it forever.
+# The reported version matters too: a stale *.egg-info in $INSTALL_DIR makes
+# importlib.metadata report the checkout's version, and the client keeps
+# re-requesting an update it already has.
 IMPORTED=$(cd "$INSTALL_DIR" && runuser -u "$SERVICE_USER" -- env PYTHONSAFEPATH=1 \
-  "$VERSION_DIR/.venv/bin/python" -c 'import mimir_display; print(mimir_display.__file__)' 2>&1 || true)
+  "$VERSION_DIR/.venv/bin/python" -c 'import mimir_display; from mimir_display.version import CLIENT_VERSION; print(CLIENT_VERSION, mimir_display.__file__)' 2>&1 || true)
 case "$IMPORTED" in
-  "$VERSION_DIR"/*) log "import check OK ($IMPORTED)" ;;
-  *) fail "$VERSION" "release would not be imported from $INSTALL_DIR (got: $IMPORTED)" ;;
+  "$VERSION $VERSION_DIR"/*) log "import check OK ($IMPORTED)" ;;
+  *) fail "$VERSION" "release would not be imported as v$VERSION from $INSTALL_DIR (got: $IMPORTED)" ;;
 esac
 
 # ---------- flip symlink + systemd drop-in ----------
