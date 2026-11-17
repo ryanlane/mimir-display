@@ -17,7 +17,8 @@ Settings (environment / .env):
 
   HA_MQTT_HOST, HA_MQTT_PORT (1883), HA_MQTT_USERNAME, HA_MQTT_PASSWORD
   HA_DISCOVERY_PREFIX   default "homeassistant"
-  HA_BUTTONS            auto (default: on for Inky), true, false
+  HA_BUTTONS            false (default), true, or auto (on for Inky); off by
+                        default because framed displays usually hide them
   HA_BUTTON_PINS        BCM pins for A,B,C,D (default 5,6,16,24; C is 25 on
                         the 13.3" Impression, picked automatically)
 """
@@ -179,10 +180,12 @@ def build_discovery(
     add("new_image", "button", "New image", cmd_t=f"{base}/new_image/press", ic="mdi:image-refresh")
     add("redraw", "button", "Redraw", cmd_t=f"{base}/redraw/press", ic="mdi:monitor-shimmer")
     add("restart", "button", "Restart", cmd_t=f"{base}/restart/press", dev_cla="restart", ent_cat="config")
-    if buttons:
-        for b in BUTTON_NAMES:
+    for b in BUTTON_NAMES:
+        if buttons:
             add(f"button_{b}", "event", f"Button {b.upper()}", stat_t=f"{base}/button/{b}",
                 evt_typ=["press", "long_press"], dev_cla="button")
+        else:
+            cmps[f"button_{b}"] = {"p": "event"}  # platform only: removes it if it was there
 
     def sensor(key: str, ename: str, **extra: Any) -> None:
         add(key, "sensor", ename, stat_t=diag, val_tpl="{{ value_json." + key + " }}", ent_cat="diagnostic", **extra)
@@ -294,6 +297,8 @@ class HomeAssistantBridge:
         self._buttons: ButtonWatcher | None = None
         self._buttons_enabled = False
         self._last_state = ""
+        self._mimir_record: dict[str, Any] = {}  # Mimir's last-image record, for scene/channel
+        self._record_for = None  # last_displayed it was fetched for
 
     @property
     def enabled(self) -> bool:
@@ -334,7 +339,8 @@ class HomeAssistantBridge:
         return {
             "photo": self.caption.get("title") or ("Untitled" if st.get("last_displayed") else "None"),
             "last_image": st.get("last_displayed"),
-            "channel": st.get("assigned_subchannel_id") or st.get("assigned_scene_id") or "None",
+            "channel": (st.get("assigned_subchannel_id") or self._mimir_record.get("subchannel_id")
+                        or st.get("assigned_scene_id") or self._mimir_record.get("scene_id")),
             "mimir_connected": self._mimir_connected(),
             "orientation": caps.get("orientation") or "landscape",
         }
@@ -345,8 +351,8 @@ class HomeAssistantBridge:
             "artist": self.caption.get("artist", ""),
             "details": self.caption.get("details", ""),
             "image_url": st.get("ha_caption_url", ""),
-            "scene_id": st.get("assigned_scene_id"),
-            "subchannel_id": st.get("assigned_subchannel_id"),
+            "scene_id": st.get("assigned_scene_id") or self._mimir_record.get("scene_id"),
+            "subchannel_id": st.get("assigned_subchannel_id") or self._mimir_record.get("subchannel_id"),
         }
 
     def build_diag(self) -> dict[str, Any]:
@@ -378,7 +384,7 @@ class HomeAssistantBridge:
         return f"Mimir display ({backend or 'auto'}{size})"
 
     def _want_buttons(self) -> bool:
-        setting = os.getenv("HA_BUTTONS", "auto").strip().lower()
+        setting = os.getenv("HA_BUTTONS", "false").strip().lower()
         if setting in ("1", "true", "yes", "on"):
             return True
         if setting in ("0", "false", "no", "off"):
@@ -389,18 +395,45 @@ class HomeAssistantBridge:
 
     # -- actions --------------------------------------------------------------
 
+    def platform_url(self) -> str:
+        """Mimir's base URL, from the same places the rest of the client uses."""
+        m = self.manager
+        dc = getattr(m, "device_config", None)
+        url = (m.config.platform_url or (dc.platform_url if dc is not None else None)
+               or m.state.get("platform_url_override") or "")
+        return url.rstrip("/")
+
+    async def _scene_id(self, session: Any, platform: str) -> str | None:
+        """The assigned scene: known locally after set_scene, otherwise from
+        Mimir's record of the last image it sent this display."""
+        scene = self.manager.state.get("assigned_scene_id") or getattr(
+            self.manager.mqtt_client, "_assigned_scene_id", None)
+        if scene:
+            return scene
+        device = self.manager.mqtt_client.device_id
+        try:
+            async with session.get(f"{platform}/api/displays/{device}/last-image") as r:
+                if r.status == 200:
+                    return (await r.json()).get("scene_id")
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug("HA: last-image lookup failed: %s", e)
+        return None
+
     async def request_new_image(self) -> bool:
         import aiohttp
 
-        scene = self.manager.state.get("assigned_scene_id")
-        platform = (self.manager.config.platform_url or "").rstrip("/")
-        if not scene or not platform:
-            self.logger.warning("HA: new image needs an assigned scene and PLATFORM_URL")
+        platform = self.platform_url()
+        if not platform:
+            self.logger.warning("HA: new image needs Mimir's address (PLATFORM_URL or the device config)")
             return False
-        url = f"{platform}/api/scenes/{scene}/refresh"
-        body = {"target_devices": [self.manager.mqtt_client.device_id], "reason": "home_assistant"}
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=90)) as s:
+                scene = await self._scene_id(s, platform)
+                if not scene:
+                    self.logger.warning("HA: new image needs a scene assigned in Mimir")
+                    return False
+                url = f"{platform}/api/scenes/{scene}/refresh"
+                body = {"target_devices": [self.manager.mqtt_client.device_id], "reason": "home_assistant"}
                 async with s.post(url, json=body) as r:
                     self.logger.info("HA: new image requested (HTTP %s)", r.status)
                     return 200 <= r.status < 300
@@ -456,7 +489,28 @@ class HomeAssistantBridge:
 
     # -- run loop -------------------------------------------------------------
 
+    async def _refresh_mimir_record(self) -> None:
+        """After each new image, fetch Mimir's record of it for the scene and
+        channel (the client only learns them from set_scene, which isn't
+        always sent)."""
+        last = self.manager.state.get("last_displayed")
+        platform = self.platform_url()
+        if not last or last == self._record_for or not platform:
+            return
+        self._record_for = last
+        import aiohttp
+
+        device = self.manager.mqtt_client.device_id
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+                async with s.get(f"{platform}/api/displays/{device}/last-image") as r:
+                    if r.status == 200:
+                        self._mimir_record = await r.json()
+        except Exception as e:  # noqa: BLE001
+            self.logger.debug("HA: last-image lookup failed: %s", e)
+
     async def _publish_state(self, client: Any, force: bool) -> None:
+        await self._refresh_mimir_record()
         state = json.dumps(self.build_state())
         if force or state != self._last_state:
             await client.publish(f"{self.base}/state", state, retain=True)

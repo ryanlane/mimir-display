@@ -150,7 +150,7 @@ HA_MQTT_PORT=1883
 HA_MQTT_USERNAME=mimir-displays
 HA_MQTT_PASSWORD=...
 # HA_DISCOVERY_PREFIX=homeassistant
-# HA_BUTTONS=auto        # auto: on for Inky; true / false
+# HA_BUTTONS=false       # true to expose the Impression's buttons (off: usually hidden in a frame)
 # HA_BUTTON_PINS=5,6,16,24  # BCM pins for A-D (C is 25 on the 13.3" Impression; picked automatically)
 ```
 

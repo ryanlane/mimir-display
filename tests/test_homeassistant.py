@@ -71,7 +71,7 @@ def test_discovery_payload_shape():
 
 def test_discovery_without_buttons_or_location():
     d = ha.build_discovery(device_id="Frame-1", name="F", base="b", version="1", model="m", location="Unknown")
-    assert not any(k.startswith("button_") for k in d["cmps"])
+    assert d["cmps"]["button_a"] == {"p": "event"}  # removal stubs only
     assert "sa" not in d["dev"]
     assert d["dev"]["ids"] == "mimir_display_frame_1"
 
@@ -124,8 +124,25 @@ def test_state(bridge):
     assert bridge.build_state()["mimir_connected"] is False
 
 
-def test_buttons_auto(bridge, monkeypatch):
+def test_buttons_off_by_default(bridge, monkeypatch):
     monkeypatch.delenv("HA_BUTTONS", raising=False)
+    assert not bridge._want_buttons()
+
+
+def test_platform_url_sources(bridge):
+    class DC:
+        platform_url = "http://mimir.local:5000/"
+
+    bridge.manager.config.platform_url = ""
+    bridge.manager.device_config = DC()
+    assert bridge.platform_url() == "http://mimir.local:5000"
+    bridge.manager.device_config = None
+    bridge.manager.state["platform_url_override"] = "http://oak:5000"
+    assert bridge.platform_url() == "http://oak:5000"
+
+
+def test_buttons_auto(bridge, monkeypatch):
+    monkeypatch.setenv("HA_BUTTONS", "auto")
     assert bridge._want_buttons()
     bridge.manager.capabilities["simulation_mode"] = True
     assert not bridge._want_buttons()
