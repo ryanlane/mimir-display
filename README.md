@@ -138,6 +138,38 @@ mimir-display --backend auto
 
 > See `.env.example` for a more complete, commented template.
 
+## Home Assistant
+
+Set `HA_MQTT_HOST` and the display appears in Home Assistant as a device, via
+MQTT discovery on HA's broker (a separate connection from Mimir's, so the two
+can be different brokers):
+
+```bash
+HA_MQTT_HOST=192.168.1.18
+HA_MQTT_PORT=1883
+HA_MQTT_USERNAME=mimir-displays
+HA_MQTT_PASSWORD=...
+# HA_DISCOVERY_PREFIX=homeassistant
+# HA_BUTTONS=auto        # auto: on for Inky; true / false
+# HA_BUTTON_PINS=5,6,16,24  # BCM pins for A-D (C is 25 on the 13.3" Impression; picked automatically)
+```
+
+Entities:
+
+* **Photo**: the image's title from Mimir's metadata (artist, details, URL and
+  scene as attributes; "Untitled" when the channel sends none), **Last image**
+  (timestamp), **Channel**, **Mimir connection**
+* **Orientation** (select): applied at runtime, saved, and a correctly shaped
+  image is requested from Mimir
+* **New image** (asks Mimir for a new image for this display), **Redraw**
+  (re-renders the current image, e.g. to clear e-ink ghosting), **Restart**
+* **Button A-D** (Inky Impression): event entities with `press` and
+  `long_press` (held 1 s), for automations
+* Diagnostics: CPU temperature, Wi-Fi signal, IP address, memory and disk use,
+  last boot, undervoltage, throttling, client version, backend, resolution
+
+The display goes unavailable in HA when the client stops (MQTT last will).
+
 ## Systemd Service Example
 ```ini
 [Unit]

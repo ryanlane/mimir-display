@@ -164,6 +164,13 @@ class MqttDisplayClientManager:
             get_metadata=lambda: self.metadata,
         )
 
+        # Home Assistant device (enabled by HA_MQTT_HOST)
+        from .homeassistant import HomeAssistantBridge
+
+        self.homeassistant = HomeAssistantBridge(self, self.logger)
+        if self.homeassistant.enabled:
+            self.mqtt_client.commands.set_on_display_image(self.homeassistant.on_display_image)
+
         # Initialize network services
         self.webhook_server = WebhookServer(self, self.config.webhook_port) if self.config.webhook_enabled else None
         self.provisioning_server = None
@@ -233,6 +240,8 @@ class MqttDisplayClientManager:
             self.state["last_content_path"] = str(content_path)
             self.state["last_display_config"] = display_config
             self._save_state()
+            if getattr(self, "homeassistant", None):
+                self.homeassistant.notify()
 
             try:
                 fields = {}
@@ -475,6 +484,9 @@ class MqttDisplayClientManager:
         print("Press Ctrl+C to stop...")
 
         listener = asyncio.create_task(self.mqtt_client.run_discovery_listener(), name="mqtt.discovery")
+        ha_task = None
+        if self.homeassistant.enabled:
+            ha_task = asyncio.create_task(self.homeassistant.run(self.stop_event), name="homeassistant")
 
         try:
             done, pending = await asyncio.wait(
@@ -497,6 +509,10 @@ class MqttDisplayClientManager:
                     await listener
             raise
         finally:
+            if ha_task and not ha_task.done():
+                ha_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await ha_task
             await self.shutdown()
 
     # ------------------------------------------------------------------
