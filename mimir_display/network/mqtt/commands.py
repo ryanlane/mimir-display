@@ -122,6 +122,9 @@ class MqttCommandHandler:
     # Dispatch
     # ------------------------------------------------------------------
 
+    def set_on_display_image(self, callback: Callable | None) -> None:
+        self._display_handler.set_on_display_image(callback)
+
     def register_handler(self, command_type: str, handler: Callable) -> None:
         """Register a handler for a specific command type."""
         self.command_handlers[command_type] = handler

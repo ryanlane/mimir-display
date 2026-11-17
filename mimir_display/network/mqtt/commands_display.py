@@ -51,6 +51,11 @@ class DisplayCommandHandler:
         self.current_scene_id: str | None = None
         self.current_subchannel_id: str | None = None
 
+    def set_on_display_image(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        """Observer called with each display_image command before rendering
+        (e.g. so Home Assistant can show the image's title)."""
+        self._on_display_image = callback
+
     def set_event_publisher(self, event_publisher: MqttEventPublisher) -> None:
         self._event_publisher = event_publisher
 
@@ -239,6 +244,12 @@ class DisplayCommandHandler:
         2. If that fails (KeyError / other), fall back to a direct download + render.
         """
         self.logger.info("Received display image command: %s", command)
+        observer = getattr(self, "_on_display_image", None)
+        if observer:
+            try:
+                observer(command)
+            except Exception as e:  # noqa: BLE001 - never block rendering
+                self.logger.debug("display_image observer failed: %s", e)
         assignment_id = command.get("assignment_id", "display_image")
         image_url = command.get("image_url") or command.get("url")
 
