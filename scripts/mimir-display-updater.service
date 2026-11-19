@@ -1,8 +1,1 @@
-[Unit]
-Description=Mimir Display OTA updater (root; triggered by request file)
-After=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/bash /opt/mimir-display/scripts/ota_update.sh
-TimeoutStartSec=30min
+../mimir_display/updater/mimir-display-updater.service

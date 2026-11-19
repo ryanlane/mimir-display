@@ -410,6 +410,20 @@ automatically by `update_display.sh`), it updates itself:
    On any failure the previous version keeps running and the failure is
    reported in the display's presence payload (visible in the web UI).
 
+The updater script and its systemd units live in `mimir_display/updater/` and
+ship inside every release (`scripts/` holds symlinks to them). The unit runs the
+`ota_update.sh` from the **active release** (`current/.venv/.../mimir_display/updater/`),
+falling back to `/opt/mimir-display/scripts/ota_update.sh` only before the first
+OTA. Each successful update also refreshes the updater units from the new
+release, so updater fixes roll out by OTA like everything else.
+
+Displays whose updater unit predates this (it runs `scripts/ota_update.sh` from
+an old checkout that never changes) need a one-time switch after their next OTA:
+
+```bash
+sudo bash /opt/mimir-display/current/.venv/lib/python3*/site-packages/mimir_display/updater/install_ota_updater.sh
+```
+
 Useful bits:
 
 ```bash
