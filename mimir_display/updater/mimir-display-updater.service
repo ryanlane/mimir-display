@@ -1,0 +1,12 @@
+[Unit]
+Description=Mimir Display OTA updater (root; triggered by request file)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Run the updater shipped with the ACTIVE release (root-owned, replaced on every
+# OTA) so updater fixes reach the device with the next release. Fall back to the
+# checkout copy only before the first OTA, when 'current' does not exist yet.
+# ($$ escapes $ from systemd so bash sees the variable.)
+ExecStart=/usr/bin/bash -c 'for s in /opt/mimir-display/current/.venv/lib/python3*/site-packages/mimir_display/updater/ota_update.sh /opt/mimir-display/scripts/ota_update.sh; do if [ -f "$$s" ]; then echo "[ota] using $$s"; exec /usr/bin/bash "$$s"; fi; done; echo "[ota] no ota_update.sh found" >&2; exit 1'
+TimeoutStartSec=30min

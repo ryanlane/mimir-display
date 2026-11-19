@@ -82,6 +82,11 @@ Issues = "https://github.com/ryanlane/mimir-display/issues"
 [tool.setuptools.packages.find]
 include = ["mimir_display*"]
 
+[tool.setuptools.package-data]
+# Root OTA updater script + systemd units ship with every release (see
+# mimir_display/updater/__init__.py).
+"mimir_display.updater" = ["*.sh", "*.service", "*.path"]
+
 [tool.black]
 line-length = 88
 target-version = ['py38']
